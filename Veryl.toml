@@ -14,3 +14,8 @@ target = { type = "directory", path = "target" }
 
 [dependencies]
 fixedpoint = { path = "../fixedpoint" }
+
+[publish]
+register = true
+bump_commit = true
+publish_commit = true
