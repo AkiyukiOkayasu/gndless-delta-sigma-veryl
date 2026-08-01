@@ -3,3 +3,7 @@
 [[releases]]
 version = "0.1.0"
 revision = "a93dfb719179a4d3802ba7be5e6e2aa09e35a2e8"
+
+[[releases]]
+version = "0.1.1"
+revision = "d4364276df9e7f4e9e8575fcf5f968fd5650f933"
