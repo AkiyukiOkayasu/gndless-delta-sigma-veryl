@@ -8,13 +8,16 @@ PCMから1bit PDMへ変換する1次・2次delta-sigma modulatorです。
 ±1 LSBのハイパスTPDFディザを加えます。`DITHER_SEED`は非ゼロ値を指定し、複数
 インスタンスを並列使用する場合はチャンネルごとに異なる値を指定してください。
 
+`DeltaSigma1st` は無音時に0/1の完全な交互列となり、同じ3段CIC検査で可聴帯域の
+トーンを検出しなかったため、ディザは加えません。
+
 ```veryl
 inst modulator: delta_sigma::DeltaSigma2nd (...);
 ```
 
 ## 無音アイドルトーン検査
 
-長時間の無音時挙動を確認するNative Testを用意しています。通常のテストからは除外されているため、必要時だけ実行します。
+1次・2次の長時間無音時挙動を確認するNative Testを用意しています。通常のテストからは除外されているため、必要時だけ実行します。
 Rust verification componentを使用するため、Veryl nightlyが必要です。
 
 ```sh
