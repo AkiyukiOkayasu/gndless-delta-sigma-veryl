@@ -4,7 +4,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 use veryl_component::*;
 
 const SAMPLE_RATE_HZ: f64 = 50_000_000.0 / 1024.0;
-const CIC_GAIN: f64 = 1024.0 * 1024.0 * 1024.0;
+const CIC_GAIN: i64 = 1024 * 1024 * 1024;
 const DISCARD_SAMPLES: u64 = 48_829;
 const WINDOW_SIZE: usize = 16_384;
 const HOP_SIZE: usize = WINDOW_SIZE / 2;
@@ -18,10 +18,11 @@ struct SpectralPeak {
     level_dbfs: f64,
 }
 
-/// 3段CICで間引いた無音PDMを監視し、可聴帯域の狭帯域トーンを検出する。
+/// 無音PDMを3段CICで間引き、可聴帯域の狭帯域トーンを検出する。
 ///
-/// CIC出力を50MHz / 1024で取得し、リセット後1秒を除外して16384点Hann窓FFTを
-/// 50% overlapで実行する。20Hzから20kHzの最大ピークが-100dBFS以上なら失敗とする。
+/// CICは50MHz入力、1/1024間引き、3段、64bit wraparoundで実行する。リセット後1秒を
+/// 除外して16384点Hann窓FFTを50% overlapで実行し、20Hzから20kHzの最大ピークが
+/// -100dBFS以上なら失敗とする。
 #[derive(Component)]
 #[component(kind = clocked)]
 pub struct IdleToneChecker {
@@ -29,10 +30,11 @@ pub struct IdleToneChecker {
     clk: ClockPort,
     /// テスト初期化をコンポーネントの状態にも反映するリセット。
     rst: ResetPort,
-    /// CIC出力が有効なクロックを示す信号。
-    sample_valid: InputPort,
-    /// CICゲイン1024^3を含む64bit signed CIC出力。
-    sample: InputPort,
+    /// DeltaSigma変調器の1bit PDM出力。
+    pdm: InputPort,
+    decimation_count: u16,
+    integrator: [i64; 3],
+    comb_delay: [i64; 3],
     observed_samples: u64,
     windows: u64,
     samples: VecDeque<f64>,
@@ -43,8 +45,8 @@ pub struct IdleToneChecker {
 #[component_impl]
 impl IdleToneChecker {
     fn on_build(&mut self, _ctx: &mut BuildCtx) -> Result<()> {
-        if self.sample.width() != 64 {
-            bail!("sample port must be 64 bits, got {}", self.sample.width());
+        if self.pdm.width() != 1 {
+            bail!("pdm port must be 1 bit, got {}", self.pdm.width());
         }
         Ok(())
     }
@@ -54,6 +56,9 @@ impl IdleToneChecker {
         let _ = self.rst;
         self.observed_samples = 0;
         self.windows = 0;
+        self.decimation_count = 0;
+        self.integrator = [0; 3];
+        self.comb_delay = [0; 3];
         self.samples.clear();
         self.loudest = None;
         self.reported_failure = false;
@@ -64,37 +69,30 @@ impl IdleToneChecker {
         if !ctx.fired(self.clk) {
             return Ok(());
         }
-        if !ctx.read(self.sample_valid).as_bool() {
-            return Ok(());
+        if let Some(sample) = self.cic_step(if ctx.read(self.pdm).as_bool() { 1 } else { -1 }) {
+            self.observed_samples += 1;
+            if self.observed_samples > DISCARD_SAMPLES {
+                self.samples.push_back(sample as f64 / CIC_GAIN as f64);
+                if self.samples.len() == WINDOW_SIZE {
+                    let peak = spectral_peak(self.samples.make_contiguous());
+                    self.windows += 1;
+                    if self
+                        .loudest
+                        .is_none_or(|current| peak.level_dbfs > current.level_dbfs)
+                    {
+                        self.loudest = Some(peak);
+                    }
+                    if peak.level_dbfs >= MAX_TONE_DBFS && !self.reported_failure {
+                        ctx.fail(format!(
+                            "idle tone detected: window={} frequency={:.3}Hz level={:.2}dBFS (limit {:.2}dBFS)",
+                            self.windows, peak.frequency_hz, peak.level_dbfs, MAX_TONE_DBFS
+                        ));
+                        self.reported_failure = true;
+                    }
+                    self.samples.drain(..HOP_SIZE);
+                }
+            }
         }
-
-        self.observed_samples += 1;
-        if self.observed_samples <= DISCARD_SAMPLES {
-            return Ok(());
-        }
-
-        let sample = ctx.read(self.sample).as_i64()? as f64 / CIC_GAIN;
-        self.samples.push_back(sample);
-        if self.samples.len() != WINDOW_SIZE {
-            return Ok(());
-        }
-
-        let peak = spectral_peak(self.samples.make_contiguous());
-        self.windows += 1;
-        if self
-            .loudest
-            .is_none_or(|current| peak.level_dbfs > current.level_dbfs)
-        {
-            self.loudest = Some(peak);
-        }
-        if peak.level_dbfs >= MAX_TONE_DBFS && !self.reported_failure {
-            ctx.fail(format!(
-                "idle tone detected: window={} frequency={:.3}Hz level={:.2}dBFS (limit {:.2}dBFS)",
-                self.windows, peak.frequency_hz, peak.level_dbfs, MAX_TONE_DBFS
-            ));
-            self.reported_failure = true;
-        }
-        self.samples.drain(..HOP_SIZE);
         Ok(())
     }
 
@@ -112,6 +110,29 @@ impl IdleToneChecker {
 }
 
 veryl_component_export!("idle_tone_checker" => IdleToneChecker);
+
+impl IdleToneChecker {
+    /// 1クロック分のCICを実行し、間引き出力時だけ値を返す。
+    fn cic_step(&mut self, input: i64) -> Option<i64> {
+        self.integrator[0] = self.integrator[0].wrapping_add(input);
+        for index in 1..self.integrator.len() {
+            self.integrator[index] =
+                self.integrator[index].wrapping_add(self.integrator[index - 1]);
+        }
+
+        if self.decimation_count != 1023 {
+            self.decimation_count += 1;
+            return None;
+        }
+        self.decimation_count = 0;
+
+        let comb_0 = self.integrator[2].wrapping_sub(self.comb_delay[0]);
+        let comb_1 = comb_0.wrapping_sub(self.comb_delay[1]);
+        let comb_2 = comb_1.wrapping_sub(self.comb_delay[2]);
+        self.comb_delay = [self.integrator[2], comb_0, comb_1];
+        Some(comb_2)
+    }
+}
 
 fn spectral_peak(samples: &[f64]) -> SpectralPeak {
     let mean = samples.iter().sum::<f64>() / samples.len() as f64;
@@ -156,11 +177,24 @@ mod tests {
         let mut sim = MockSim::new()
             .clock_port("clk")
             .reset_port("rst")
-            .input("sample_valid", 1)
-            .input("sample", 64);
+            .input("pdm", 1);
         let mut c = sim.build::<IdleToneChecker>().unwrap();
         sim.clock(&mut c).unwrap();
         assert!(!sim.failed());
+    }
+
+    #[test]
+    fn cic_gain_matches_three_stage_decimator() {
+        let mut sim = MockSim::new()
+            .clock_port("clk")
+            .reset_port("rst")
+            .input("pdm", 1);
+        let mut checker = sim.build::<IdleToneChecker>().unwrap();
+        let mut output = None;
+        for _ in 0..(1024 * 4) {
+            output = checker.cic_step(1);
+        }
+        assert_eq!(output, Some(CIC_GAIN));
     }
 
     #[test]

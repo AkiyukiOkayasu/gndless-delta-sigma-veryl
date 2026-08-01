@@ -238,21 +238,14 @@ module test_delta_sigma_2nd_density {
 #[test(test_delta_sigma_1st_idle_capture)]
 #[ignore]
 module test_delta_sigma_1st_idle_capture {
-    const CAPTURE_CHUNKS       : u32 = 22;
-    const CHUNK_CYCLES         : u32 = 100_000_000;
-    const CIC_DECIMATION       : u32 = 1024;
-    const CIC_STAGES           : u32 = 3;
-    const CIC_INPUT_WIDTH      : u32 = 64;
-    const CIC_ACCUMULATOR_WIDTH: u32 = 64;
+    const CAPTURE_CHUNKS: u32 = 22;
+    const CHUNK_CYCLES  : u32 = 100_000_000;
 
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var zero_audio       : gndless_fixedpoint::Q1_31::Raw                       ;
-    var pdm              : logic                                                ;
-    var pdm_sample       : signed logic                  <CIC_INPUT_WIDTH>      ;
-    var cic_output_valid : bbool                                                ;
-    var cic_output_sample: signed logic                  <CIC_ACCUMULATOR_WIDTH>;
+    var zero_audio: gndless_fixedpoint::Q1_31::Raw;
+    var pdm       : logic                         ;
 
     inst dut: DeltaSigma1st (
         clk  : clk       ,
@@ -261,29 +254,10 @@ module test_delta_sigma_1st_idle_capture {
         pdm  : pdm       ,
     );
 
-    always_comb {
-        pdm_sample = if pdm ? 64'sd1 : -64'sd1;
-    }
-
-    inst cic: gndless_filter::CicDecimator #(
-        INPUT_WIDTH      : CIC_INPUT_WIDTH      ,
-        ACCUMULATOR_WIDTH: CIC_ACCUMULATOR_WIDTH,
-        STAGES           : CIC_STAGES           ,
-        DECIMATION       : CIC_DECIMATION       ,
-    ) (
-        clk          : clk              ,
-        rst          : rst              ,
-        input_valid  : true             ,
-        input_sample : pdm_sample       ,
-        output_valid : cic_output_valid ,
-        output_sample: cic_output_sample,
-    );
-
     inst idle_tone_checker: $comp::idle_tone_checker (
-        clk         : clk              ,
-        rst         : rst              ,
-        sample_valid: cic_output_valid ,
-        sample      : cic_output_sample,
+        clk: clk,
+        rst: rst,
+        pdm: pdm,
     );
 
     initial {
@@ -308,21 +282,14 @@ module test_delta_sigma_1st_idle_capture {
 #[test(test_delta_sigma_2nd_idle_capture)]
 #[ignore]
 module test_delta_sigma_2nd_idle_capture {
-    const CAPTURE_CHUNKS       : u32 = 22;
-    const CHUNK_CYCLES         : u32 = 100_000_000;
-    const CIC_DECIMATION       : u32 = 1024;
-    const CIC_STAGES           : u32 = 3;
-    const CIC_INPUT_WIDTH      : u32 = 64;
-    const CIC_ACCUMULATOR_WIDTH: u32 = 64;
+    const CAPTURE_CHUNKS: u32 = 22;
+    const CHUNK_CYCLES  : u32 = 100_000_000;
 
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    var zero_audio       : gndless_fixedpoint::Q1_31::Raw                       ;
-    var pdm              : logic                                                ;
-    var pdm_sample       : signed logic                  <CIC_INPUT_WIDTH>      ;
-    var cic_output_valid : bbool                                                ;
-    var cic_output_sample: signed logic                  <CIC_ACCUMULATOR_WIDTH>;
+    var zero_audio: gndless_fixedpoint::Q1_31::Raw;
+    var pdm       : logic                         ;
 
     inst dut: DeltaSigma2nd (
         clk  : clk       ,
@@ -331,29 +298,10 @@ module test_delta_sigma_2nd_idle_capture {
         pdm  : pdm       ,
     );
 
-    always_comb {
-        pdm_sample = if pdm ? 64'sd1 : -64'sd1;
-    }
-
-    inst cic: gndless_filter::CicDecimator #(
-        INPUT_WIDTH      : CIC_INPUT_WIDTH      ,
-        ACCUMULATOR_WIDTH: CIC_ACCUMULATOR_WIDTH,
-        STAGES           : CIC_STAGES           ,
-        DECIMATION       : CIC_DECIMATION       ,
-    ) (
-        clk          : clk              ,
-        rst          : rst              ,
-        input_valid  : true             ,
-        input_sample : pdm_sample       ,
-        output_valid : cic_output_valid ,
-        output_sample: cic_output_sample,
-    );
-
     inst idle_tone_checker: $comp::idle_tone_checker (
-        clk         : clk              ,
-        rst         : rst              ,
-        sample_valid: cic_output_valid ,
-        sample      : cic_output_sample,
+        clk: clk,
+        rst: rst,
+        pdm: pdm,
     );
 
     initial {
