@@ -1,5 +1,6 @@
 .build/
 /target
+**/.build/
 /dependencies
 **/target/
 **/dependencies/
@@ -43,4 +44,3 @@ Temporary Items
 groundless_veryl_cores.f
 *.f
 plan
-

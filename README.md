@@ -12,18 +12,13 @@ PCMから1bit PDMへ変換する1次・2次delta-sigma modulatorです。
 inst modulator: delta_sigma::DeltaSigma2nd (...);
 ```
 
-## 無音アイドルPDMキャプチャ
+## 無音アイドルトーン検査
 
 長時間の無音時挙動を確認するNative Testを用意しています。通常のテストからは除外されているため、必要時だけ実行します。
+Rust verification componentを使用するため、Veryl nightlyが必要です。
 
 ```sh
 veryl test --ignored
 ```
 
-`target/test_delta_sigma_2nd_idle_capture.csv` に、50MHzで44秒間のPDMを3段CIC・1/1024で間引いた値を書き出します。出力レートは48.828125kHz、値にはCICゲイン `1024^3` が含まれます。
-
-```sh
-python3 tools/analyze_delta_sigma_idle_capture.py
-```
-
-解析器はCICゲインを正規化し、Hann窓FFTによる時間窓ごとのRMS・最大トーン周波数・最大トーンレベルを `*_analysis.csv` に出力します。無音時のスイープは、時刻に対する `peak_frequency_hz` の連続的な上昇または下降として確認します。
+50MHzで44秒間のPDMを3段CIC・1/1024で間引き、Rust verification component が内部で解析します。リセット後1秒を除外し、16384点Hann窓FFTを50% overlapで実行します。20Hzから20kHzの最大狭帯域ピークが-100dBFS以上ならテストは失敗します。通常時は、最強ピークの周波数とレベルをテスト出力へ表示します。CSVは出力しません。

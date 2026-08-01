@@ -20,3 +20,6 @@ gndless_filter = { path = "../gndless-filter-veryl" }
 register = true
 bump_commit = true
 publish_commit = true
+
+[[components]]
+path = "idle_tone_checker"
