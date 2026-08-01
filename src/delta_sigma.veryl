@@ -28,8 +28,12 @@ pub module DeltaSigma1st (
 /// 2次デルタシグマ変調器
 ///
 /// 2段の積分器を持つ簡易構成で、1次変調器より高い帯域外ノイズシェーピングを得る。
-/// 内部演算は余裕を持たせた40bit signedとする。
-pub module DeltaSigma2nd (
+/// 内部演算は余裕を持たせた40bit signedとする。無音時の決定論的な
+/// アイドルトーンを防ぐため、変調器入力へ±1 LSBのハイパスTPDFディザを加える。
+pub module DeltaSigma2nd #(
+    /// ハイパスTPDFディザ用LFSRの非ゼロ初期値。
+    param DITHER_SEED: u32 = 32'h1A2B_3C4D,
+) (
     clk  : input  clock                         , /// システムクロック
     rst  : input  reset                         , /// リセット
     audio: input  gndless_fixedpoint::Q1_31::Raw, /// Q1.31入力サンプル
@@ -38,26 +42,56 @@ pub module DeltaSigma2nd (
     var integrator_1: signed logic<40>;
     var integrator_2: signed logic<40>;
 
-    // PDM帰還値: FEEDBACK_POS = 2^30 - 1、FEEDBACK_NEG = -2^30
-    const FEEDBACK_POS: signed logic<40> = 1073741823;
+    // PDM帰還値は正負を完全に対称にする。
+    const FEEDBACK_POS: signed logic<40> = 1073741824;
     const FEEDBACK_NEG: signed logic<40> = -1073741824;
+
+    // 32bit maximal-length LFSR。現在値と1クロック前のベルヌーイ乱数の差分で、
+    // -1/0/+1 LSB（1:2:1）のハイパスTPDFディザを構成する。
+    var dither_prng         : logic<32>;
+    var dither_prng_previous: logic    ;
+    var dither_seed_pending : logic    ;
+    var dither_valid        : logic    ;
+    inst dither_lfsr: $std::lfsr_galois #(
+        SIZE: 32,
+    ) (
+        i_clk: clk ,
+        i_en : 1'b1,
+        // `if_reset`で立てた要求により、`reset`の極性に依存せずseedをロードする。
+        i_set   : dither_seed_pending,
+        i_setval: DITHER_SEED        ,
+        o_val   : dither_prng        ,
+    );
 
     always_ff {
         if_reset {
-            integrator_1 = 0;
-            integrator_2 = 0;
-            pdm          = 1'b0;
+            integrator_1         = 0;
+            integrator_2         = 0;
+            pdm                  = 1'b0;
+            dither_seed_pending  = 1'b1;
+            dither_valid         = 1'b0;
+            dither_prng_previous = 1'b0;
         } else {
             // 同一format内の内部スケールなので、raw値へ直接算術右シフトする
             let audio_scaled     : signed logic<32> = $signed(audio) >>> 2;
-            let input_ext        : signed logic<40> = audio_scaled as 40;
+            let dither_current   : signed logic<3>  = if dither_prng[0] ? 3'sd1 : 3'sd0;
+            let dither_previous  : signed logic<3>  = if dither_prng_previous ? 3'sd1 : 3'sd0;
+            let dither           : signed logic<3>  = if dither_valid ? dither_current - dither_previous : 3'sd0;
+            let audio_ext        : signed logic<40> = $signed({audio_scaled[31] repeat 8, audio_scaled});
+            let dither_ext       : signed logic<40> = $signed({dither[2] repeat 37, dither});
+            let input_ext        : signed logic<40> = audio_ext + dither_ext;
             let feedback         : signed logic<40> = if pdm ? FEEDBACK_POS : FEEDBACK_NEG;
             let integrator_1_next: signed logic<40> = integrator_1 + (input_ext - feedback);
             let integrator_2_next: signed logic<40> = integrator_2 + (integrator_1_next - feedback);
 
-            integrator_1 = integrator_1_next;
-            integrator_2 = integrator_2_next;
-            pdm          = ~integrator_2_next[39];
+            integrator_1        = integrator_1_next;
+            integrator_2        = integrator_2_next;
+            pdm                 = ~integrator_2_next[39];
+            dither_seed_pending = 1'b0;
+            dither_valid        = 1'b1;
+            if dither_valid {
+                dither_prng_previous = dither_prng[0];
+            }
         }
     }
 }
@@ -192,6 +226,88 @@ module test_delta_sigma_2nd_density {
         $assert(zero_ones >: 8'd40 && zero_ones <: 8'd88, "2nd order zero density mismatch");
         $assert(positive_ones >: 8'd88, "2nd order positive density is too low");
         $assert(negative_ones <: 8'd40, "2nd order negative density is too high");
+        $finish();
+    }
+}
+
+/// 2次デルタシグマ変調器の無音時PDMを長時間取得するネイティブベンチマーク
+///
+/// 50MHzで44秒間（22億clock）を実行し、PDMを3段CICで1/1024へ間引いたCSVを出力する。
+/// 出力値にはCICゲイン1024^3が含まれる。長時間のため通常のtestからは除外する。
+#[test(test_delta_sigma_2nd_idle_capture)]
+#[ignore]
+module test_delta_sigma_2nd_idle_capture {
+    const CAPTURE_CHUNKS       : u32 = 22;
+    const CHUNK_CYCLES         : u32 = 100_000_000;
+    const CIC_DECIMATION       : u32 = 1024;
+    const CIC_STAGES           : u32 = 3;
+    const CIC_INPUT_WIDTH      : u32 = 64;
+    const CIC_ACCUMULATOR_WIDTH: u32 = 64;
+
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    var zero_audio       : gndless_fixedpoint::Q1_31::Raw                       ;
+    var pdm              : logic                                                ;
+    var pdm_sample       : signed logic                  <CIC_INPUT_WIDTH>      ;
+    var cic_output_valid : bbool                                                ;
+    var cic_output_sample: signed logic                  <CIC_ACCUMULATOR_WIDTH>;
+    var capture_cycle    : logic                         <32>                   ;
+    var output_index     : logic                         <32>                   ;
+    var file             : $tb::file                                            ;
+
+    inst dut: DeltaSigma2nd (
+        clk  : clk       ,
+        rst  : rst       ,
+        audio: zero_audio,
+        pdm  : pdm       ,
+    );
+
+    always_comb {
+        pdm_sample = if pdm ? 64'sd1 : -64'sd1;
+    }
+
+    inst cic: gndless_filter::CicDecimator #(
+        INPUT_WIDTH      : CIC_INPUT_WIDTH      ,
+        ACCUMULATOR_WIDTH: CIC_ACCUMULATOR_WIDTH,
+        STAGES           : CIC_STAGES           ,
+        DECIMATION       : CIC_DECIMATION       ,
+    ) (
+        clk          : clk              ,
+        rst          : rst              ,
+        input_valid  : true             ,
+        input_sample : pdm_sample       ,
+        output_valid : cic_output_valid ,
+        output_sample: cic_output_sample,
+    );
+
+    function capture_chunk () {
+        for _ in 0..CHUNK_CYCLES {
+            clk.next(1);
+            if cic_output_valid {
+                file.write("%d,%d,%h\n", output_index, capture_cycle, cic_output_sample);
+                output_index += 1;
+            }
+            capture_cycle += 1;
+        }
+    }
+
+    initial {
+        zero_audio    = 0;
+        capture_cycle = 0;
+        output_index  = 0;
+        file.open("target/test_delta_sigma_2nd_idle_capture.csv");
+        file.write("index,cycle,cic_3stage_1024x_bits\n");
+
+        rst.assert();
+        clk.next(4);
+
+        for _ in 0..CAPTURE_CHUNKS {
+            capture_chunk();
+        }
+
+        file.flush();
+        file.close();
         $finish();
     }
 }

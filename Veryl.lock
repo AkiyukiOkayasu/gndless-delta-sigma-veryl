@@ -15,3 +15,20 @@ version = "0.1.0"
 revision = "db96e9a844be365019faacca543a44188564024c"
 
 [projects.properties]
+
+[[projects]]
+name = "gndless_filter"
+source = "../gndless-filter-veryl"
+
+[projects.properties]
+
+[[projects.dependencies]]
+name = "gndless_fixedpoint"
+
+[projects.dependencies.source]
+uuid = "f1b9fe28-7740-559e-b221-46bee01da60c"
+url = "https://github.com/AkiyukiOkayasu/gndless-fixedpoint-veryl"
+path = ""
+project = "gndless_fixedpoint"
+version = "0.1.0"
+revision = "db96e9a844be365019faacca543a44188564024c"

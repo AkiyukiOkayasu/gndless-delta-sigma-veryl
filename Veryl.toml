@@ -14,6 +14,7 @@ target = { type = "directory", path = "target" }
 
 [dependencies]
 gndless_fixedpoint = { github = "AkiyukiOkayasu/gndless-fixedpoint-veryl", version = "0.1.0" }
+gndless_filter = { path = "../gndless-filter-veryl" }
 
 [publish]
 register = true
