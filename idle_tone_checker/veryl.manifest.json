@@ -1,0 +1,32 @@
+{
+  "types": {
+    "idle_tone_checker": {
+      "doc": "無音PDMを3段CICで間引き、可聴帯域の狭帯域トーンを検出する。\n\nCICは50MHz入力、1/1024間引き、3段、64bit wraparoundで実行する。リセット後1秒を\n除外して16384点Hann窓FFTを50% overlapで実行し、20Hzから20kHzの最大ピークが\n-100dBFS以上なら失敗とする。",
+      "kind": "clocked",
+      "ports": [
+        {
+          "name": "clk",
+          "dir": "input",
+          "role": "clock",
+          "doc": "CICと同じサンプリングクロック。"
+        },
+        {
+          "name": "rst",
+          "dir": "input",
+          "role": "reset",
+          "doc": "テスト初期化をコンポーネントの状態にも反映するリセット。"
+        },
+        {
+          "name": "pdm",
+          "dir": "input",
+          "doc": "DeltaSigma変調器の1bit PDM出力。"
+        }
+      ],
+      "params": [],
+      "requires": [],
+      "groups": [],
+      "methods": []
+    }
+  },
+  "source_hash": "ea15565e7dcc181b11073c317b119904df0cebd36422689607ac4be85614203f"
+}
