@@ -2,7 +2,7 @@
 
 PCMから1bit PDMへ変換する1次・2次delta-sigma modulatorです。
 
-入力はQ1.31( `gndless_fixedpoint::Q1_31::Raw` )。出力は常に1bitです。stateは同期resetで初期化します。
+入力はQ1.31の`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>`です。出力は常に1bitです。stateは同期resetで初期化します。
 
 `DeltaSigma2nd` は無音時のアイドル・トーンを避けるため、変調器入力へ
 ±1 LSBのハイパスTPDFディザを加えます。`DITHER_SEED`は非ゼロ値を指定し、複数

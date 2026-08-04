@@ -7,11 +7,11 @@ name = "gndless_fixedpoint"
 dependencies = []
 
 [projects.source]
-uuid = "f1b9fe28-7740-559e-b221-46bee01da60c"
+uuid = "14e43f16-b28a-5906-9892-0ea0bcdfc492"
 url = "https://github.com/AkiyukiOkayasu/gndless-fixedpoint-veryl"
 path = ""
 project = "gndless_fixedpoint"
-version = "0.1.0"
-revision = "db96e9a844be365019faacca543a44188564024c"
+version = "0.2.0"
+revision = "62fe80930ed4fee336333dd2d4b9476c56594ca8"
 
 [projects.properties]

@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 破壊的変更: `DeltaSigma1st`と`DeltaSigma2nd`のQ1.31入力を`FixedPointValue::<Q1_31>` interfaceへ変更
+- `gndless_fixedpoint`依存を0.2.0へ更新
+
 ## [0.1.1] - 2026-08-02
 
 ### Added

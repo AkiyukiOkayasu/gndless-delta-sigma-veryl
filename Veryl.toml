@@ -13,7 +13,7 @@ target = { type = "directory", path = "target" }
 [test]
 
 [dependencies]
-gndless_fixedpoint = { github = "AkiyukiOkayasu/gndless-fixedpoint-veryl", version = "0.1.0" }
+gndless_fixedpoint = { github = "AkiyukiOkayasu/gndless-fixedpoint-veryl", version = "0.2.0" }
 
 [publish]
 register = true
