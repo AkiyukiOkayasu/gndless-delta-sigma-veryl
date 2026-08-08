@@ -13,8 +13,7 @@ target = { type = "directory", path = "target" }
 [test]
 
 [dependencies]
-# 未公開のローカル変更を利用するためpath指定。公開前にgithub依存へ戻す。
-gndless_fixedpoint = { path = "../gndless-fixedpoint-veryl" }
+gndless_fixedpoint = { github = "AkiyukiOkayasu/gndless-fixedpoint-veryl", version = "0.2.2" }
 
 [publish]
 register = true

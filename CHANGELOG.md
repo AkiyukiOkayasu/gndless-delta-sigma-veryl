@@ -4,6 +4,13 @@
 
 ### Changed
 
+- `DeltaSigma1st`/`DeltaSigma2nd`の積分器幅を40bitから36bitへ縮小し資源を削減する(挙動不変)
+- `gndless_fixedpoint`依存を0.2.2へ更新
+
+## [0.2.0] - 2026-08-04
+
+### Changed
+
 - 破壊的変更: `DeltaSigma1st`と`DeltaSigma2nd`のQ1.31入力を`FixedPointValue::<Q1_31>` interfaceへ変更
 - `gndless_fixedpoint`依存を0.2.0へ更新
 
