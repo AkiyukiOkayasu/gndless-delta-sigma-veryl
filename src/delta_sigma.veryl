@@ -1,15 +1,18 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_31;
+
 /// PCMを1bit PDMへ変換するデルタシグマ変調器
-/// 入力は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>`（-1.0以上、+1.0未満）とする。
+/// 入力は`FixedPointValue::<Q1_31>`（-1.0以上、+1.0未満）とする。
 
 /// 1次デルタシグマ変調器
 ///
 /// キャリー・アキュムレータ形式で実装し、入力のDC値に比例したPDM密度を得る。
 /// `pdm`は`clk`ごとに1bit更新される。
 pub module DeltaSigma1st (
-    clk  : input   clock                                                                       , /// システムクロック
-    rst  : input   reset                                                                       , /// リセット
-    audio: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>::input_port, /// Q1.31入力サンプル
-    pdm  : output  logic                                                                       , /// 1bit PDM出力
+    clk  : input   clock                               , /// システムクロック
+    rst  : input   reset                               , /// リセット
+    audio: modport FixedPointValue::<Q1_31>::input_port, /// Q1.31入力サンプル
+    pdm  : output  logic                               , /// 1bit PDM出力
 ) {
     var accumulator: logic<33>;
 
@@ -35,10 +38,10 @@ pub module DeltaSigma1st (
 pub module DeltaSigma2nd #(
     param DITHER_SEED: u32 = 32'h1A2B_3C4D, /// ハイパスTPDFディザ用LFSRの非ゼロ初期値
 ) (
-    clk  : input   clock                                                                       , /// システムクロック
-    rst  : input   reset                                                                       , /// リセット
-    audio: modport gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>::input_port, /// Q1.31入力サンプル
-    pdm  : output  logic                                                                       , /// 1bit PDM出力
+    clk  : input   clock                               , /// システムクロック
+    rst  : input   reset                               , /// リセット
+    audio: modport FixedPointValue::<Q1_31>::input_port, /// Q1.31入力サンプル
+    pdm  : output  logic                               , /// 1bit PDM出力
 ) {
     var integrator_1: signed logic<36>;
     var integrator_2: signed logic<36>;
@@ -103,9 +106,9 @@ module test_delta_sigma_1st_density {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    inst zero_audio    : gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
-    inst positive_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
-    inst negative_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
+    inst zero_audio    : FixedPointValue::<Q1_31>;
+    inst positive_audio: FixedPointValue::<Q1_31>;
+    inst negative_audio: FixedPointValue::<Q1_31>;
     var zero_pdm     : logic   ;
     var positive_pdm : logic   ;
     var negative_pdm : logic   ;
@@ -152,8 +155,8 @@ module test_delta_sigma_1st_density {
 
     initial {
         zero_audio.raw     = 0;
-        positive_audio.raw = gndless_fixedpoint::Q1_31::MAX;
-        negative_audio.raw = gndless_fixedpoint::Q1_31::MIN;
+        positive_audio.raw = Q1_31::MAX;
+        negative_audio.raw = Q1_31::MIN;
         rst.assert();
         clk.next(64);
 
@@ -170,9 +173,9 @@ module test_delta_sigma_2nd_density {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    inst zero_audio    : gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
-    inst positive_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
-    inst negative_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
+    inst zero_audio    : FixedPointValue::<Q1_31>;
+    inst positive_audio: FixedPointValue::<Q1_31>;
+    inst negative_audio: FixedPointValue::<Q1_31>;
     var zero_pdm     : logic   ;
     var positive_pdm : logic   ;
     var negative_pdm : logic   ;
@@ -219,8 +222,8 @@ module test_delta_sigma_2nd_density {
 
     initial {
         zero_audio.raw     = 0;
-        positive_audio.raw = gndless_fixedpoint::Q1_31::MAX;
-        negative_audio.raw = gndless_fixedpoint::Q1_31::MIN;
+        positive_audio.raw = Q1_31::MAX;
+        negative_audio.raw = Q1_31::MIN;
         rst.assert();
         clk.next(128);
 
@@ -245,7 +248,7 @@ module test_delta_sigma_1st_idle_capture {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    inst zero_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
+    inst zero_audio: FixedPointValue::<Q1_31>;
     var pdm: logic;
 
     inst dut: DeltaSigma1st (
@@ -289,7 +292,7 @@ module test_delta_sigma_2nd_idle_capture {
     inst clk: $tb::clock_gen;
     inst rst: $tb::reset_gen ( clk );
 
-    inst zero_audio: gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>;
+    inst zero_audio: FixedPointValue::<Q1_31>;
     var pdm: logic;
 
     inst dut: DeltaSigma2nd (
