@@ -20,9 +20,8 @@ struct SpectralPeak {
 
 /// 無音PDMを3段CICで間引き、可聴帯域の狭帯域トーンを検出する。
 ///
-/// CICは50MHz入力、1/1024間引き、3段、64bit wraparoundで実行する。リセット後1秒を
-/// 除外して16384点Hann窓FFTを50% overlapで実行し、20Hzから20kHzの最大ピークが
-/// -100dBFS以上なら失敗とする。
+/// CICは50MHz入力、1/1024間引き、3段、64bit wraparoundで実行する。
+/// リセット後1秒を除外して16384点Hann窓FFTを50% overlapで実行し、20Hzから20kHzの最大ピークが-100dBFS以上なら失敗とする。
 #[derive(Component)]
 #[component(kind = clocked)]
 pub struct IdleToneChecker {
