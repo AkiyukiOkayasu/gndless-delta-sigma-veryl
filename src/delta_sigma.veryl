@@ -31,6 +31,7 @@ pub module DeltaSigma1st (
 /// 2次デルタシグマ変調器
 ///
 /// 2段の積分器を持つ簡易構成で、1次変調器より高い帯域外ノイズシェーピングを得る。
+/// 入力Q1.31は1/4にスケールするため、フルスケール入力のPDM密度は約0.25/0.75になる。
 /// 内部演算は36bit signedとする。
 /// 入力±2^29、帰還±2^30に対し積分器の実振幅は最大~2^32程度であり、±2^35の範囲に4倍以上のヘッドルームを持たせている（旧実装の40bitはこの2倍を超える過剰幅だった）。
 /// 無音時の決定論的なアイドルトーンを防ぐため、変調器入力へ±1 LSBのハイパスTPDFディザを加える。
@@ -229,6 +230,60 @@ module test_delta_sigma_2nd_density {
         $assert(zero_ones >: 8'd40 && zero_ones <: 8'd88, "2nd order zero density mismatch");
         $assert(positive_ones >: 8'd88, "2nd order positive density is too low");
         $assert(negative_ones <: 8'd40, "2nd order negative density is too high");
+        $finish();
+    }
+}
+
+/// 2次デルタシグマ変調器がフルスケール入力で長時間stuckしないことを検証
+///
+/// 入力Q1.31は1/4にスケールされるため、+MAXの密度は約0.75、MINは約0.25になる。
+#[test(test_delta_sigma_2nd_full_scale)]
+module test_delta_sigma_2nd_full_scale {
+    inst clk: $tb::clock_gen;
+    inst rst: $tb::reset_gen ( clk );
+
+    inst positive_audio: FixedPointValue::<Q1_31>;
+    inst negative_audio: FixedPointValue::<Q1_31>;
+    var positive_pdm : logic;
+    var negative_pdm : logic;
+    var positive_ones: u16  ;
+    var negative_ones: u16  ;
+
+    inst positive: DeltaSigma2nd (
+        clk  : clk           ,
+        rst  : rst           ,
+        audio: positive_audio,
+        pdm  : positive_pdm  ,
+    );
+    inst negative: DeltaSigma2nd (
+        clk  : clk           ,
+        rst  : rst           ,
+        audio: negative_audio,
+        pdm  : negative_pdm  ,
+    );
+
+    always_ff (clk, rst) {
+        if_reset {
+            positive_ones = 0;
+            negative_ones = 0;
+        } else {
+            if positive_pdm {
+                positive_ones += 1;
+            }
+            if negative_pdm {
+                negative_ones += 1;
+            }
+        }
+    }
+
+    initial {
+        positive_audio.raw = Q1_31::MAX;
+        negative_audio.raw = Q1_31::MIN;
+        rst.assert();
+        clk.next(4096);
+
+        $assert(positive_ones >: 16'd2500 && positive_ones <: 16'd3600, "positive full-scale density mismatch");
+        $assert(negative_ones >: 16'd500 && negative_ones <: 16'd1600, "negative full-scale density mismatch");
         $finish();
     }
 }
