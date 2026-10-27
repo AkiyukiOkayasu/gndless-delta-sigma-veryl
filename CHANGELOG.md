@@ -9,9 +9,15 @@
 ### Changed
 
 - `DeltaSigma2nd`のフルスケールPDM密度が約0.25/0.75になることをREADMEとdoc commentへ明記した
-- `DeltaSigma1st`/`DeltaSigma2nd`の積分器幅を40bitから36bitへ縮小し資源を削減する(挙動不変)
-- `gndless_fixedpoint`依存を0.2.2へ更新
 - `gndless_fixedpoint`の package をトップレベル import し、`FixedPointValue` / `Q1_31` の完全修飾パスを短縮（Veryl 0.20.3 の namespace import 機能を使用）
+
+## [0.2.1] - 2026-08-08
+
+### Changed
+
+- `DeltaSigma2nd`の積分器幅を40bitから36bitへ縮小し資源を削減した
+- `gndless_fixedpoint`依存を0.2.2へ更新
+- github依存解決のlockを反映した
 
 ## [0.2.0] - 2026-08-04
 
