@@ -12,9 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: veryl-lang/setup-veryl@v1
-        with:
-          version: nightly
+      - name: Setup Veryl 0.22.0
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 -o "$RUNNER_TEMP/veryl.zip" \
+            https://github.com/veryl-lang/veryl/releases/download/v0.22.0/veryl-x86_64-linux.zip
+          unzip -q "$RUNNER_TEMP/veryl.zip" -d "$RUNNER_TEMP/veryl"
+          chmod +x "$RUNNER_TEMP/veryl/veryl"
+          echo "$RUNNER_TEMP/veryl" >> "$GITHUB_PATH"
       - name: Format check
         continue-on-error: true
         run: veryl fmt --check
@@ -37,7 +41,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: veryl-lang/setup-veryl@v1
-        with:
-          version: nightly
+      - name: Setup Veryl 0.22.0
+        run: |
+          curl -fsSL --retry 3 --retry-delay 5 -o "$RUNNER_TEMP/veryl.zip" \
+            https://github.com/veryl-lang/veryl/releases/download/v0.22.0/veryl-x86_64-linux.zip
+          unzip -q "$RUNNER_TEMP/veryl.zip" -d "$RUNNER_TEMP/veryl"
+          chmod +x "$RUNNER_TEMP/veryl/veryl"
+          echo "$RUNNER_TEMP/veryl" >> "$GITHUB_PATH"
       - run: veryl test --backend-validate
