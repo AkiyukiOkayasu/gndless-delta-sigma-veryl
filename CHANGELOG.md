@@ -5,6 +5,7 @@
 ### Changed
 
 - `DeltaSigma1st`は入力32bit精度を維持し、出力をキャリーFFへ直結して1 FFと1clockの遅延を削減した
+- `DeltaSigma2nd`は入力rawを切り捨てず小数32bitで処理し、DC周期性対策の微小HPディザを維持し、LFSRをresetで直接初期化する構成へ変更した
 
 ## [0.2.2] - 2026-10-27
 

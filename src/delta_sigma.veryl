@@ -29,74 +29,65 @@ pub module DeltaSigma1st (
     }
 }
 
-/// 2次デルタシグマ変調器
+/// 2次1bitデルタシグマ変調器
 ///
-/// 2段の積分器を持つ簡易構成で、1次変調器より高い帯域外ノイズシェーピングを得る。
-/// 入力Q1.31は1/4にスケールするため、フルスケール入力のPDM密度は約0.25/0.75になる。
-/// 内部演算は36bit signedとする。
-/// 入力±2^29、帰還±2^30に対し積分器の実振幅は最大~2^32程度であり、±2^35の範囲に4倍以上のヘッドルームを持たせている（旧実装の40bitはこの2倍を超える過剰幅だった）。
-/// 無音時の決定論的なアイドルトーンを防ぐため、変調器入力へ±1 LSBのハイパスTPDFディザを加える。
+/// Q1.31入力を毎posedgeで取り込み、直後に登録PDMを更新する。
+/// pdmを1=+1、0=-1として復調したときの利得は1/2で、フルスケール入力の平均密度は約0.25/0.75となる。
+/// 微小ハイパスディザを使用するが、DC・微小入力でのトーン抑制は保証しない。
+/// 状態overflow時はwrapし、過負荷の保護・通知は行わない。
+/// reset中のpdm=0は復調値0ではないため、必要な出力ミュートは利用側で行う。
 pub module DeltaSigma2nd #(
-    param DITHER_SEED: u32 = 32'h1A2B_3C4D, /// ハイパスTPDFディザ用LFSRの非ゼロ初期値
+    param DITHER_SEED: u32 = 32'h1A2B_3C4D, /// ディザ乱数の非ゼロ初期値、resetで同じ系列を再現
 ) (
-    clk  : input   clock                               , /// システムクロック
-    rst  : input   reset                               , /// リセット
-    audio: modport FixedPointValue::<Q1_31>::input_port, /// Q1.31入力サンプル
-    pdm  : output  logic                               , /// 1bit PDM出力
+    clk  : input   clock                               , /// PDM更新クロック
+    rst  : input   reset                               , /// 変調状態とpdmを0に初期化し、ディザ乱数系列を再開
+    audio: modport FixedPointValue::<Q1_31>::input_port, /// 全32bitを使用するQ1.31入力（-1以上1未満）
+    pdm  : output  logic                               , /// 毎clock更新する登録PDM出力
 ) {
-    var integrator_1: signed logic<36>;
-    var integrator_2: signed logic<36>;
+    // 入力精度を維持しながら状態範囲[-32,32)を確保するため、小数32bit・全幅38bitを使う。
+    // 中間値も同じ幅なので、範囲外の加減算は2の補数でwrapする。
+    type State = signed logic<38>;
 
-    // PDM帰還値は正負を完全に対称にする。
-    const FEEDBACK_POS: signed logic<36> = 1073741824;
-    const FEEDBACK_NEG: signed logic<36> = -1073741824;
+    var integrator_1: State;
+    var integrator_2: State;
 
-    // 32bit maximal-length LFSR。
-    // 現在値と1クロック前のベルヌーイ乱数の差分で、-1/0/+1 LSB（1:2:1）のハイパスTPDFディザを構成する。
-    var dither_prng         : logic<32>;
-    var dither_prng_previous: logic    ;
-    var dither_seed_pending : logic    ;
-    var dither_valid        : logic    ;
-    inst dither_lfsr: $std::lfsr_galois #(
-        SIZE: 32,
-    ) (
-        i_clk: clk ,
-        i_en : 1'b1,
-        // `if_reset`で立てた要求により、`reset`の極性に依存せずseedをロードする。
-        i_set   : dither_seed_pending,
-        i_setval: DITHER_SEED        ,
-        o_val   : dither_prng        ,
-    );
+    // 帰還の±1を±2^32で表し、正負対称にして入力0の平均密度を0.5に保つ。
+    const UNITY: State = 38'sd4294967296;
+
+    var dither_prng    : logic<32>;
+    var dither_previous: logic    ;
 
     always_ff {
         if_reset {
-            integrator_1         = 0;
-            integrator_2         = 0;
-            pdm                  = 1'b0;
-            dither_seed_pending  = 1'b1;
-            dither_valid         = 1'b0;
-            dither_prng_previous = 1'b0;
+            integrator_1 = 0;
+            integrator_2 = 0;
+            dither_prng  = DITHER_SEED;
+            // 初回の前後差を0にし、reset解除時にディザ由来の単発入力を作らない。
+            dither_previous = DITHER_SEED[0];
+            pdm             = 0;
         } else {
-            // 同一format内の内部スケールなので、raw値へ直接算術右シフトする
-            let audio_scaled     : signed logic<32> = $signed(audio.raw) >>> 2;
-            let dither_current   : signed logic<3>  = if dither_prng[0] ? 3'sd1 : 3'sd0;
-            let dither_previous  : signed logic<3>  = if dither_prng_previous ? 3'sd1 : 3'sd0;
-            let dither           : signed logic<3>  = if dither_valid ? dither_current - dither_previous : 3'sd0;
-            let audio_ext        : signed logic<36> = $signed({audio_scaled[31] repeat 4, audio_scaled});
-            let dither_ext       : signed logic<36> = $signed({dither[2] repeat 33, dither});
-            let input_ext        : signed logic<36> = audio_ext + dither_ext;
-            let feedback         : signed logic<36> = if pdm ? FEEDBACK_POS : FEEDBACK_NEG;
-            let integrator_1_next: signed logic<36> = integrator_1 + (input_ext - feedback);
-            let integrator_2_next: signed logic<36> = integrator_2 + (integrator_1_next - feedback);
+            // rawの小数点位置を1bit増やすことで、入力精度を落とさず1/2スケールにする。
+            let x: State = $signed({audio.raw[31] repeat 6, audio.raw});
 
-            integrator_1        = integrator_1_next;
-            integrator_2        = integrator_2_next;
-            pdm                 = ~integrator_2_next[35];
-            dither_seed_pending = 1'b0;
-            dither_valid        = 1'b1;
-            if dither_valid {
-                dither_prng_previous = dither_prng[0];
-            }
+            // 0/4の乱数の前後差から、帰還基準の2^-30をピークとする微小HPディザを作る。
+            // resetを挟まない区間では差分和が始点と終点の差となり、累積寄与は±4 LSB以内に収まる。
+            let current : State = if dither_prng[0] ? 38'sd4 : 38'sd0;
+            let previous: State = if dither_previous ? 38'sd4 : 38'sd0;
+            let dither  : State = current - previous;
+
+            // 前clockのpdmを両積分器へ帰還し、第2段にはこのclockのnext_1を渡す。
+            // 帰還減算と入力・ディザ加算を並列に求め、加算器の直列段数を抑える。
+            let feedback: State = if pdm ? UNITY : -UNITY;
+            let next_1  : State = (integrator_1 - feedback) + (x + dither);
+            let next_2  : State = (integrator_2 - feedback) + next_1;
+
+            integrator_1 = next_1;
+            integrator_2 = next_2;
+            pdm          = ~next_2[37];
+
+            // 右シフトGalois LFSRの更新にはedge前のLSBを使い、前回bitも同じ値で更新する。
+            dither_previous = dither_prng[0];
+            dither_prng     = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8000_0057 : 32'd0);
         }
     }
 }
@@ -168,7 +159,7 @@ module test_delta_sigma_1st_density {
     }
 }
 
-/// 2次デルタシグマ変調器の出力密度が入力振幅に追従することを検証
+// 2次デルタシグマ変調器の出力密度が入力振幅に追従することを検証
 #[test(test_delta_sigma_2nd_density)]
 module test_delta_sigma_2nd_density {
     inst clk: $tb::clock_gen;
@@ -235,9 +226,9 @@ module test_delta_sigma_2nd_density {
     }
 }
 
-/// 2次デルタシグマ変調器がフルスケール入力で長時間stuckしないことを検証
-///
-/// 入力Q1.31は1/4にスケールされるため、+MAXの密度は約0.75、MINは約0.25になる。
+// 2次デルタシグマ変調器がフルスケール入力で長時間stuckしないことを検証
+//
+// 復調利得は1/2のため、+MAXの密度は約0.75、MINは約0.25になる。
 #[test(test_delta_sigma_2nd_full_scale)]
 module test_delta_sigma_2nd_full_scale {
     inst clk: $tb::clock_gen;
@@ -333,11 +324,11 @@ module test_delta_sigma_1st_idle_capture {
     }
 }
 
-/// 2次デルタシグマ変調器の無音時アイドルトーンを検査するネイティブテスト
-///
-/// 50MHzで44秒間（22億clock）を実行する。
-/// PDMを3段CICで1/1024に間引き、Rust verification componentで20Hzから20kHzの狭帯域トーンを検出する。
-/// 長時間のため通常のtestからは除外する。
+// 2次デルタシグマ変調器の無音時アイドルトーンを検査するネイティブテスト
+//
+// 50MHzで44秒間（22億clock）を実行する。
+// PDMを3段CICで1/1024に間引き、Rust verification componentで20Hzから20kHzの狭帯域トーンを検出する。
+// 長時間のため通常のtestからは除外する。
 #[test(test_delta_sigma_2nd_idle_capture)]
 #[ignore]
 module test_delta_sigma_2nd_idle_capture {
@@ -415,6 +406,69 @@ module test_delta_sigma_1st_cv {
         audio.raw = Q1_31::MIN;
         clk.next();
         $assert(!pdm, "negative endpoint must take effect at next edge");
+        $finish();
+    }
+}
+
+// 2次の入力下位bitを切り捨てず状態へ取り込むことを検証。
+#[test(test_delta_sigma_2nd_input_precision)]
+module test_delta_sigma_2nd_input_precision {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm: logic;
+    inst dut: DeltaSigma2nd ( clk, rst, audio, pdm );
+    initial {
+        audio.raw = 1;
+        rst.assert();
+        clk.next();
+        $assert(dut.integrator_1 == 38'sd4294967297, "2nd lost input LSB");
+        $assert(dut.integrator_2 == 38'sd8589934593, "2nd lost input LSB in second state");
+        clk.next();
+        $assert(dut.integrator_1 == 38'sd2, "2nd input LSB accumulation");
+        $assert(pdm, "2nd quantizer sign");
+        $finish();
+    }
+}
+
+// DC入力に対するディザの累積寄与が±4 LSB以内で、resetで乱数位相が復元されることを検証。
+#[test(test_delta_sigma_2nd_dc_dither)]
+module test_delta_sigma_2nd_dc_dither {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm: logic;
+    inst dut: DeltaSigma2nd #( DITHER_SEED: 32'd1 ) ( clk, rst, audio, pdm );
+    initial {
+        audio.raw = 32;
+        rst.assert();
+        for _ in 0..2 {
+            var input_sum   : i64;
+            var feedback_sum: i64;
+            var ones        : u32;
+            var excursions  : u32;
+            input_sum    = 0;
+            feedback_sum = 0;
+            ones         = 0;
+            excursions   = 0;
+            $assert(dut.dither_prng == 32'd1, "2nd dither reset seed");
+            for _ in 0..65536 {
+                input_sum    += 32;
+                feedback_sum += if pdm ? 64'sd4294967296 : -64'sd4294967296;
+                clk.next();
+                let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+                $assert(residual >= -64'sd4 && residual <= 64'sd4, "2nd dither accumulated DC offset");
+                if residual != 0 {
+                    excursions += 1;
+                }
+                if pdm {
+                    ones += 1;
+                }
+            }
+            $assert(excursions >: 1000, "2nd dither did not perturb DC state");
+            $assert(ones >: 32760 && ones <: 32776, "2nd dither DC density");
+            rst.assert();
+        }
         $finish();
     }
 }
