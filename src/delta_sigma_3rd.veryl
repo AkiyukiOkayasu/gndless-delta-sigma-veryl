@@ -1,0 +1,327 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_31;
+
+/// 単段3次1bitデルタシグマ変調器
+///
+/// Q1.31入力を毎posedgeで取り込み、直後に登録PDMを更新する。
+/// pdmを1=+1、0=-1として復調したときの利得は1/2で、入力下位5bitは負無限大へ丸めて切り捨てる。
+/// DC・微小入力では周期的な成分が残る場合がある。
+/// 入力波形によっては過負荷になるため、overloadを監視する。
+/// 過負荷検出時は状態をクリアし、pdm=0・overload=1を1clock出力して次周期から再開する。
+/// reset中のpdm=0は復調値0ではないため、必要な出力ミュートは利用側で行う。
+pub module DeltaSigma3rd #(
+    param DITHER_SEED: u32 = 32'h1A2B_3C4D, /// ディザ乱数の非ゼロ初期値、resetで同じ系列を再現
+) (
+    clk     : input   clock                               , /// PDM更新クロック
+    rst     : input   reset                               , /// 変調状態・pdm・overloadを0に初期化し、ディザ乱数系列を再開
+    audio   : modport FixedPointValue::<Q1_31>::input_port, /// Q1.31入力（-1以上1未満）
+    pdm     : output  logic                               , /// 毎clock更新する登録PDM出力
+    overload: output  logic                               , /// 過負荷検出を1clock通知、この周期のpdmは0
+) {
+    // 全状態を小数27bitとし、保存範囲を順に[-16,16)、[-64,64)、[-256,256)とする。
+    type State1 = signed logic<32>;
+    type State2 = signed logic<34>;
+    type State3 = signed logic<36>;
+
+    // 更新値にはguardを1bit加え、状態を切り詰める前にoverflowを検出する。
+    type Next1 = signed logic<33>;
+    type Next2 = signed logic<35>;
+    type Next3 = signed logic<37>;
+
+    // 保護範囲内では帰還・入力・ディザの合計が±32未満となるため、小数27bitの33bit幅で判定できる。
+    type Quantizer = signed logic<33>;
+
+    // 小数27bitの状態とQ24係数の積・和を、小数51bitのまま保持する。
+    type Wide = signed logic<57>;
+
+    var integrator_1: State1;
+    var integrator_2: State2;
+    var integrator_3: State3;
+
+    var dither_prng: logic<32>;
+
+    const UNITY: Next1 = 33'sd134217728;
+
+    always_ff {
+        if_reset {
+            integrator_1 = 0;
+            integrator_2 = 0;
+            integrator_3 = 0;
+            dither_prng  = DITHER_SEED;
+            pdm          = 0;
+            overload     = 0;
+        } else {
+            // 下位5bitの除去はQ1.31から小数27bitへの変換と1/2スケールを兼ね、負無限大へ丸める。
+            let x    : signed logic<27> = $signed(audio.raw[31:5]);
+            let x_ext: Quantizer        = $signed({x[26] repeat 6, x});
+
+            // シフト前に符号拡張し、元の状態幅でのシフトによる上位bitの欠落を防ぐ。
+            let s1: Wide = $signed({integrator_1[31] repeat 25, integrator_1});
+            let s2: Wide = $signed({integrator_2[33] repeat 23, integrator_2});
+            let s3: Wide = $signed({integrator_3[35] repeat 21, integrator_3});
+
+            // Q24係数11182988、3418645、453260を係数誤差なしのCSD加算木へ展開し、DSP推論を避ける。
+            let product_1: Wide = (((-(s1 <<< 2) + (s1 <<< 4)) + (-(s1 <<< 7) + ((s1 <<< 10) + (s1 <<< 13))))
+                + (((s1 <<< 15) + (s1 <<< 17)) + ((s1 <<< 19) + ((s1 <<< 21) + (s1 <<< 23)))));
+            let product_2: Wide = ((((s2 <<< 0) + (s2 <<< 2)) + ((s2 <<< 4) + (s2 <<< 9)))
+                + (((s2 <<< 11) + (s2 <<< 13)) + ((s2 <<< 18) + (-(s2 <<< 20) + (s2 <<< 22)))));
+            let product_3: Wide = (((-(s3 <<< 2) + (s3 <<< 4)) + ((s3 <<< 7) + (s3 <<< 9)))
+                + (((s3 <<< 11) + -(s3 <<< 13)) + (-(s3 <<< 16) + (s3 <<< 19))));
+
+            // 3積を合計してから一度だけ小数24bitを捨て、各積を個別に丸める誤差を避ける。
+            let feedback: Quantizer = ((product_1 + product_2 + product_3) >>> 24) as 33;
+
+            // 8bit区画の差を使い、閾値ディザのピークを255/2^14（約0.01556）に制限する。
+            // ディザは判定閾値にだけ作用し、積分器入力xには直接加えない。
+            let random_a         : signed logic<10> = $signed({2'b00, dither_prng[7:0]});
+            let random_b         : signed logic<10> = $signed({2'b00, dither_prng[15:8]});
+            let random_difference: signed logic<10> = random_a - random_b;
+            let dither           : Quantizer        = $signed({random_difference[9] repeat 23, random_difference})
+                <<< 13;
+
+            // 入力とディザを先に加算し、CSD加算木の後ろに置く演算を33bit減算1個にする。
+            let input_with_dither: Quantizer = x_ext + dither;
+            let quantizer_input  : Quantizer = input_with_dither - feedback;
+            let decision         : logic     = ~quantizer_input[32];
+
+            // s1 += q - xの符号規約とし、量子化器で状態和を引くことで負帰還を構成する。
+            // qの確定を待たず±1の両候補を計算し、量子化器から保護判定までのcarry chainを避ける。
+            let base_1         : Next1 = $signed({integrator_1[31], integrator_1}) - x_ext;
+            let next_1_positive: Next1 = base_1 + UNITY;
+            let next_1_negative: Next1 = base_1 - UNITY;
+
+            // guardと保存先の符号bitが異なると範囲外で、負端点は受理し正端点は除外する。
+            // 未選択の候補だけがoverflowしても、実際の状態更新は妨げない。
+            let overflow_positive: logic = next_1_positive[32] ^ next_1_positive[31];
+            let overflow_negative: logic = next_1_negative[32] ^ next_1_negative[31];
+            let overflow_1       : logic = if decision ? overflow_positive : overflow_negative;
+            let next_1           : Next1 = if decision ? next_1_positive : next_1_negative;
+
+            // 第2・第3段はedge前の状態を使い、next_1やnext_2を連鎖させない。
+            let next_2    : Next2 = $signed({integrator_2[33], integrator_2})
+                + $signed({integrator_1[31] repeat 3, integrator_1});
+            let next_3    : Next3 = $signed({integrator_3[35], integrator_3})
+                + $signed({integrator_2[33] repeat 3, integrator_2});
+            let overflow_2: logic = next_2[34] ^ next_2[33];
+            let overflow_3: logic = next_3[36] ^ next_3[35];
+
+            // 過負荷時も乱数を進め、保護による状態クリアではディザの位相を巻き戻さない。
+            dither_prng = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8020_0003 : 32'd0);
+
+            pdm      = decision;
+            overload = 0;
+
+            // 範囲外の値を保存せず全段を同時クリアし、wrapした状態がループへ入ることを防ぐ。
+            if overflow_1 || overflow_2 || overflow_3 {
+                integrator_1 = 0;
+                integrator_2 = 0;
+                integrator_3 = 0;
+                pdm          = 0;
+                overload     = 1;
+            } else {
+                integrator_1 = next_1 as 32;
+                integrator_2 = next_2 as 34;
+                integrator_3 = next_3 as 36;
+            }
+        }
+    }
+}
+
+// 長時間DC密度、極性反転、ゼロ復帰、フルスケール交互入力で保護が作動しないことを検証。
+#[test(test_delta_sigma_3rd_density)]
+module test_delta_sigma_3rd_density {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm     : logic;
+    var overload: logic;
+    inst dut: DeltaSigma3rd ( clk, rst, audio, pdm, overload );
+    initial {
+        audio.raw = 0;
+        rst.assert();
+        for phase in 0..5 {
+            if phase == 0 {
+                audio.raw = 0;
+            }
+            if phase == 1 {
+                audio.raw = Q1_31::MAX;
+            }
+            if phase == 2 {
+                audio.raw = Q1_31::MIN;
+            }
+            if phase == 3 {
+                audio.raw = 0;
+            }
+            clk.next(1024);
+            var ones: u32;
+            ones = 0;
+            for i in 0..65536 {
+                if phase == 4 {
+                    audio.raw = if (i % 2) == 0 ? Q1_31::MAX : Q1_31::MIN;
+                }
+                clk.next();
+                $assert(!overload, "3rd order state protection triggered");
+                if pdm {
+                    ones += 1;
+                }
+            }
+            if phase == 1 {
+                $assert(ones >: 49000 && ones <: 49300, "positive density");
+            } else if phase == 2 {
+                $assert(ones >: 16200 && ones <: 16500, "negative density");
+            } else {
+                $assert(ones >: 32600 && ones <: 32900, "zero mean density");
+            }
+        }
+        $finish();
+    }
+}
+
+// 全振幅・微小DC・100/200kHz矩形波・200kHz鋸歯状波のbit列と再resetの再現性を検証。
+// 期待bit列のchecksumはtools/dsm_reference.pyの整数モデルで生成する。
+#[test(test_delta_sigma_3rd_vectors)]
+module test_delta_sigma_3rd_vectors {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm           : logic;
+    var pdm_other     : logic;
+    var overload      : logic;
+    var overload_other: logic;
+    inst dut  : DeltaSigma3rd ( clk, rst, audio, pdm, overload );
+    inst other: DeltaSigma3rd #(
+        DITHER_SEED: 1,
+    ) (
+        clk                     ,
+        rst                     ,
+        audio                   ,
+        pdm     : pdm_other     ,
+        overload: overload_other,
+    );
+    const EXPECTED      : logic<32> [12] = '{
+        32'ha80f53c5, 32'ha80f53c5, 32'h8ddcc0c9, 32'h2f23df01, 32'h8ddcc0c9, 32'h39c5d68d, 32'hbc69ee29, 32'h01a4b38f,
+        32'hff8ddf38, 32'h16f2a8e4, 32'habef388e, 32'h6227239f
+    };
+    const EXPECTED_OTHER: logic<32> [12] = '{
+        32'h3feafc05, 32'h3feafc05, 32'hb54be289, 32'hf9f22d81, 32'hb54be289, 32'hae928e05, 32'he5f91329, 32'hd4258eb7,
+        32'h5c037c16, 32'hcc65f45c, 32'hbc67a8de, 32'h6e368b97
+    };
+    initial {
+        for _ in 0..2 {
+            for phase in 0..12 {
+                var checksum      : logic<32>;
+                var checksum_other: logic<32>;
+                checksum       = 32'd2166136261;
+                checksum_other = 32'd2166136261;
+                audio.raw      = 0;
+                rst.assert();
+                $assert(pdm == 0 && pdm_other == 0 && overload == 0 && overload_other == 0, "reset outputs");
+                for i in 0..65536 {
+                    case phase {
+                        0: audio.raw = 0;
+                        1: audio.raw = 1;
+                        2: audio.raw = 32'hffffffff;
+                        3: audio.raw = 32;
+                        4: audio.raw = 32'hffffffe0;
+                        5: audio.raw = Q1_31::MAX;
+                        6: audio.raw = Q1_31::MIN;
+                        7: {
+                            let t        : u32 = i % 8192;
+                            audio.raw = if t <: 4096 ?
+                                32'h80000000 + t * 32'd1048576
+                            :
+                                32'h7fffffff - (t - 4096) * 32'd1048576
+                            ;
+                        }
+                        8      : audio.raw = if (i % 500) <: 250 ? Q1_31::MAX : Q1_31::MIN;
+                        9      : audio.raw = if (i % 250) <: 125 ? Q1_31::MAX : Q1_31::MIN;
+                        10     : audio.raw = (i % 250) * 32'd17179869 - 32'h80000000;
+                        default: audio.raw = if (i % 2) == 1 ? Q1_31::MAX : Q1_31::MIN;
+                    }
+                    clk.next();
+                    $assert(!overload && !overload_other, "vector overload");
+                    checksum       = (checksum ^ (pdm as 32)) * 32'd16777619;
+                    checksum_other = (checksum_other ^ (pdm_other as 32)) * 32'd16777619;
+                }
+                $assert(checksum == EXPECTED[phase], "default seed bitstream mismatch");
+                $assert(checksum_other == EXPECTED_OTHER[phase], "alternate seed bitstream mismatch");
+            }
+        }
+        $finish();
+    }
+}
+
+// 50MHzで4秒の無音PDMを既存のnative CIC・FFT componentで検査。
+#[test(test_delta_sigma_3rd_idle_capture)]
+#[ignore]
+module test_delta_sigma_3rd_idle_capture {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm     : logic;
+    var overload: logic;
+    inst dut              : DeltaSigma3rd ( clk, rst, audio, pdm, overload );
+    inst idle_tone_checker: $comp::idle_tone_checker ( clk, rst, pdm );
+    always_ff (clk, rst) {
+        if_reset {} else {
+            $assert(!overload, "idle overload");
+        }
+    }
+    initial {
+        audio.raw = 0;
+        rst.assert();
+        for _ in 0..4 {
+            clk.next(50_000_000);
+        }
+        $finish();
+    }
+}
+
+// 非帯域制限矩形波の周波数・duty変化で状態が連続しても保護が作動せず、平均利得が一致することを検証。
+#[test(test_delta_sigma_3rd_square_sweep)]
+module test_delta_sigma_3rd_square_sweep {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm     : logic;
+    var overload: logic;
+    inst dut: DeltaSigma3rd ( clk, rst, audio, pdm, overload );
+    const PERIODS: u32 [10] = '{2, 4, 5, 10, 25, 50, 100, 250, 500, 5000};
+    initial {
+        audio.raw = 0;
+        rst.assert();
+        for p in 0..10 {
+            let period: u32 = PERIODS[p];
+            for duty_index in 0..5 {
+                let duty: u32 = case duty_index {
+                    0      : 1,
+                    1      : if period / 4 == 0 ? 1 : period / 4,
+                    2      : period / 2,
+                    3      : 3 * period / 4,
+                    default: period - 1,
+                };
+                var input_ones : u32;
+                var output_ones: u32;
+                input_ones  = 0;
+                output_ones = 0;
+                for i in 0..65536 {
+                    let high     : logic = (i % period) <: duty;
+                    audio.raw = if high ? Q1_31::MAX : Q1_31::MIN;
+                    if high {
+                        input_ones += 1;
+                    }
+                    clk.next();
+                    $assert(!overload, "square sweep overload");
+                    if pdm {
+                        output_ones += 1;
+                    }
+                }
+                $assert(
+                    4 * output_ones + 32 >: 65536 + 2 * input_ones && 4 * output_ones <: 65536 + 2 * input_ones + 32,
+                    "square sweep gain",
+                );
+            }
+        }
+        $finish();
+    }
+}

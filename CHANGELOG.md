@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 単段1bit CIFF `DeltaSigma3rd`を追加した（H_inf約1.4、閾値ディザ、状態保護、CSD定数乗算）
+
 ### Changed
 
 - `DeltaSigma1st`は入力32bit精度を維持し、出力をキャリーFFへ直結して1 FFと1clockの遅延を削減した

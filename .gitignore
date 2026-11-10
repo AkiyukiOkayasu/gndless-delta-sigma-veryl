@@ -44,3 +44,13 @@ Temporary Items
 groundless_veryl_cores.f
 *.f
 plan
+
+# Python設計・評価用キャッシュ
+__pycache__/
+.venv/
+
+# ローカルの設計探索・比較資料
+/ANALYSIS.md
+/SECOND_ORDER_DITHER.md
+/tools/design/
+/tools/gowin/

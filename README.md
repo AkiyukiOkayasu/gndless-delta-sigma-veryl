@@ -1,26 +1,43 @@
 # gndless_delta_sigma
 
-PCMから1bit PDMへ変換する1次・2次delta-sigma modulatorです。
+Q1.31波形を毎clock 1bit PDMへ変換するVeryl packageです。
 
-入力はQ1.31の`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>`です。出力は常に1bitです。resetの極性・同期性はVerylのbuild設定に従います。`DeltaSigma2nd`は入力全32bitを保持し、復調利得1/2で変換します。フルスケール入力のPDM密度は約0.25/0.75になります。
+| module | 復調利得 | 特徴 |
+| --- | --- | --- |
+| `DeltaSigma1st` | 1 | 入力32bitを保持するキャリー方式 |
+| `DeltaSigma2nd` | 1/2 | 入力32bitを保持、微小HPディザ |
+| `DeltaSigma3rd` | 1/2 | 入力下位5bitを切り捨てる単段CIFF、閾値ディザ、過負荷通知 |
 
-`DeltaSigma2nd`はDC・微小入力の周期性への備えとして、微小なハイパスディザを加えます。`DITHER_SEED`は非ゼロ値とし、resetで同じ乱数系列を再開します。全入力でのトーン抑制は保証しません。
-
-`DeltaSigma1st` は無音時に0/1の完全な交互列となり、同じ3段CIC検査で可聴帯域の
-トーンを検出しなかったため、ディザは加えません。これは`audio = 0`の固定入力に
-限る結果であり、非ゼロ入力・入力遷移を含む全条件でのスプリアス不在を保証するものではありません。
+入力型は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>`です。入力を受理したposedge後に登録PDMを更新します。enable・補間器・リミッターは持たず、入力とPDMを同じclockで毎周期更新します。
 
 ```veryl
-inst modulator: delta_sigma::DeltaSigma2nd (...);
+inst modulator: gndless_delta_sigma::DeltaSigma3rd (
+    clk: waveform_clk,
+    rst: rst,
+    audio: waveform,
+    pdm: pdm,
+    overload: overload,
+);
 ```
 
-## 無音アイドルトーン検査
+2次・3次の`DITHER_SEED`は非ゼロとし、並列チャンネルには異なる値を指定します。3次の`overload=1`では状態とPDMを0にして、次周期から通常処理へ戻ります。出力異常の診断信号として使ってください。
 
-1次・2次の現行実装について長時間無音時挙動を確認するNative Testを用意しています。通常のテストからは除外されているため、必要時だけ実行します。
-Rust verification componentを使用するため、Veryl nightlyが必要です。
+resetの極性・同期性はVerylのbuild設定に従います。reset中のPDM=0固定は復調上の負フルスケールなので、必要な起動時ミュートは利用側で扱います。PDMの復調精度と応答は復調フィルタにも依存し、入力32bitがそのままアナログ32bit精度になるわけではありません。
+
+3次の数値形式・係数・過負荷条件は[設計仕様](THIRD_ORDER.md)を参照してください。
 
 ```sh
-veryl test --ignored
+veryl fmt
+veryl check
+veryl test
+veryl build
+veryl test --ignored  # 長時間のゼロ入力検査
 ```
 
-50MHzで44秒間のPDMを3段CIC・1/1024で間引き、Rust verification component が内部で解析します。リセット後1秒を除外し、16384点Hann窓FFTを50% overlapで実行します。20Hzから20kHzの最大狭帯域ピークが-100dBFS以上ならテストは失敗します。通常時は、最強ピークの周波数とレベルをテスト出力へ表示します。CSVは出力しません。
+ゼロ入力検査はnative testとRust verification componentを使い、1次・2次は各44秒、3次は4秒のPDMをCIC・FFTで評価します。通常testからは除外しています。
+
+3次のnative testで使うbit列期待値とLFSR周期は、標準ライブラリだけで動く整数モデルで確認できます。
+
+```sh
+python3 tools/dsm_reference.py
+```
