@@ -1,29 +1,30 @@
 import gndless_fixedpoint::FixedPointValue;
 import gndless_fixedpoint::Q1_31;
 
-/// PCMを1bit PDMへ変換するデルタシグマ変調器
-/// 入力は`FixedPointValue::<Q1_31>`（-1.0以上、+1.0未満）とする。
-
-/// 1次デルタシグマ変調器
+/// 1次1bitデルタシグマ変調器
 ///
-/// キャリー・アキュムレータ形式で実装し、入力のDC値に比例したPDM密度を得る。
-/// `pdm`は`clk`ごとに1bit更新される。
+/// PCMを1bit PDMへ変換する。
+/// 入力は`FixedPointValue::<Q1_31>`（-1.0以上、+1.0未満）とする。
+/// Q1.31入力を毎posedgeで取り込み、直後に登録PDMを更新する。
+/// pdmを1=+1、0=-1として復調したときの利得は1。
+/// DC・微小入力では周期的な成分が残る場合がある。
+/// reset中のpdm=0は復調値0ではないため、必要な出力ミュートは利用側で行う。
 pub module DeltaSigma1st (
-    clk  : input   clock                               , /// システムクロック
-    rst  : input   reset                               , /// リセット
-    audio: modport FixedPointValue::<Q1_31>::input_port, /// Q1.31入力サンプル
-    pdm  : output  logic                               , /// 1bit PDM出力
+    clk  : input   clock                               , /// PDM更新クロック
+    rst  : input   reset                               , /// 変調状態とpdmを0に初期化
+    audio: modport FixedPointValue::<Q1_31>::input_port, /// 全32bitを使用するQ1.31入力（-1以上1未満）
+    pdm  : output  logic                               , /// 登録PDM出力、入力0での平均密度は0.5
 ) {
     var accumulator: logic<33>;
+
+    assign pdm = accumulator[32];
 
     always_ff {
         if_reset {
             accumulator = 0;
-            pdm         = 1'b0;
         } else {
             let audio_unsigned: logic<32> = {~audio.raw[31], audio.raw[30:0]};
             accumulator    = (accumulator[31:0] as 33) + (audio_unsigned as 33);
-            pdm            = accumulator[32];
         }
     }
 }
@@ -100,7 +101,7 @@ pub module DeltaSigma2nd #(
     }
 }
 
-/// 1次デルタシグマ変調器の出力密度が入力振幅に追従することを検証
+// 1次デルタシグマ変調器の出力密度が入力振幅に追従することを検証
 #[test(test_delta_sigma_1st_density)]
 module test_delta_sigma_1st_density {
     inst clk: $tb::clock_gen;
@@ -288,11 +289,11 @@ module test_delta_sigma_2nd_full_scale {
     }
 }
 
-/// 1次デルタシグマ変調器の無音時アイドルトーンを検査するネイティブテスト
-///
-/// 50MHzで44秒間（22億clock）を実行する。
-/// PDMを3段CICで1/1024に間引き、Rust verification componentで20Hzから20kHzの狭帯域トーンを検出する。
-/// 長時間のため通常のtestからは除外する。
+// 1次デルタシグマ変調器の無音時アイドルトーンを検査するネイティブテスト
+//
+// 50MHzで44秒間（22億clock）を実行する。
+// PDMを3段CICで1/1024に間引き、Rust verification componentで20Hzから20kHzの狭帯域トーンを検出する。
+// 長時間のため通常のtestからは除外する。
 #[test(test_delta_sigma_1st_idle_capture)]
 #[ignore]
 module test_delta_sigma_1st_idle_capture {
@@ -372,6 +373,48 @@ module test_delta_sigma_2nd_idle_capture {
             clk.next(CHUNK_CYCLES);
         }
 
+        $finish();
+    }
+}
+
+// CV・ENVの全入力bitを保持し、平均密度と負端点への応答を検証。
+#[test(test_delta_sigma_1st_cv)]
+module test_delta_sigma_1st_cv {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm: logic;
+    inst dut: DeltaSigma1st ( clk, rst, audio, pdm );
+    var random: $tb::random::<u32>;
+    initial {
+        var sum     : logic<64>;
+        var ones    : u64      ;
+        var expected: logic<33>;
+        random.seed(73);
+        sum       = 0;
+        ones      = 0;
+        expected  = 0;
+        audio.raw = 0;
+        rst.assert();
+        for _ in 0..65536 {
+            audio.raw = random.get();
+            let offset   : logic<32> = {~audio.raw[31], audio.raw[30:0]};
+            sum       += offset as 64;
+            expected  =  (expected[31:0] as 33) + (offset as 33);
+            clk.next();
+            $assert(pdm == expected[32], "CV carry mismatch");
+            $assert(dut.accumulator == expected, "CV input precision mismatch");
+            if pdm {
+                ones += 1;
+            }
+        }
+        $assert(ones == (sum >> 32), "CV mean density mismatch");
+        audio.raw = Q1_31::MAX;
+        clk.next(2);
+        $assert(pdm, "positive endpoint");
+        audio.raw = Q1_31::MIN;
+        clk.next();
+        $assert(!pdm, "negative endpoint must take effect at next edge");
         $finish();
     }
 }

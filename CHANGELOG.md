@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- `DeltaSigma1st`は入力32bit精度を維持し、出力をキャリーFFへ直結して1 FFと1clockの遅延を削減した
+
 ## [0.2.2] - 2026-10-27
 
 ### Added
