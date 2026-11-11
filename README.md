@@ -5,7 +5,9 @@ Q1.31波形を毎clock 1bit PDMへ変換するVeryl packageです。
 | module | 復調利得 | 特徴 |
 | --- | --- | --- |
 | `DeltaSigma1st` | 1 | 入力32bitを保持するキャリー方式 |
+| `DeltaSigma2ndTernary` | 1/2 | 2次3値、差動GPIO、resetは00 |
 | `DeltaSigma2nd` | 1/2 | 入力32bitを保持、微小HPディザ |
+| `DeltaSigma3rdTernary` | 1/2 | 単段CIFFの3値差動GPIO、入力下位5bit切捨て、過負荷通知 |
 | `DeltaSigma3rd` | 1/2 | 入力下位5bitを切り捨てる単段CIFF、閾値ディザ、過負荷通知 |
 
 入力型は`gndless_fixedpoint::FixedPointValue::<gndless_fixedpoint::Q1_31>`です。入力を受理したposedge後に登録PDMを更新します。enable・補間器・リミッターは持たず、入力とPDMを同じclockで毎周期更新します。
@@ -41,3 +43,7 @@ veryl test --ignored  # 長時間のゼロ入力検査
 ```sh
 python3 tools/dsm_reference.py
 ```
+
+3値版の接続・比較結果・制約は[設計と評価](TERNARY.md)を参照してください。
+
+3次3値版の数値契約と比較結果は[設計資料](THIRD_ORDER_TERNARY.md)を参照してください。

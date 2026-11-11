@@ -1,0 +1,172 @@
+import gndless_fixedpoint::FixedPointValue;
+import gndless_fixedpoint::Q1_31;
+
+/// 2次3値デルタシグマ変調器。
+/// Q1.31入力を毎posedgeで受理し、直後に2本の登録GPIOを更新する。
+/// pdm_p-pdm_nを+1/0/-1として復調した利得は1/2で、00をゼロに使う。
+/// reset中は00となり、11は通常動作でも生成しない。
+/// 入力32bitを保持し、状態は小数32bit・全幅38bit、演算範囲外はwrapする。
+/// DITHER_SEEDは非ゼロとし、微小HPディザでもDCトーンの抑制は保証しない。
+/// clockは利用側で50MHzを供給し、入力を同じclock domainで保持または補間する。
+/// GPIOの遅延差・電圧差と復調フィルタによる誤差は利用側で評価する。
+pub module DeltaSigma2ndTernary #(
+    param DITHER_SEED: u32 = 32'h1A2B_3C4D, /// ディザ乱数の非ゼロ初期値、resetで同じ系列を再現
+) (
+    clk  : input   clock                               , /// PDM更新クロック
+    rst  : input   reset                               , /// 変調状態と両GPIOを0に初期化し、ディザ乱数系列を再開
+    audio: modport FixedPointValue::<Q1_31>::input_port, /// 全32bitを使用するQ1.31入力（-1以上1未満）
+    pdm_p: output  logic                               , /// 正側GPIO、pdm_p-pdm_nが復調値
+    pdm_n: output  logic                               , /// 負側GPIO、00がゼロ、11は生成しない
+) {
+    // 入力精度を維持しながら状態範囲[-32,32)を確保するため、小数32bit・全幅38bitを使う。
+    // 中間値も同じ幅なので、範囲外の加減算は2の補数でwrapする。
+    type State = signed logic<38>;
+
+    var integrator_1: State;
+    var integrator_2: State;
+
+    // 帰還の±1を±2^32で表し、ゼロ帰還も同じ小数点位置で扱う。
+    const UNITY: State = 38'sd4294967296;
+
+    var dither_prng    : logic<32>;
+    var dither_previous: logic    ;
+
+    always_ff {
+        if_reset {
+            integrator_1 = 0;
+            integrator_2 = 0;
+            dither_prng  = DITHER_SEED;
+            // 初回の前後差を0にし、reset解除時にディザ由来の単発入力を作らない。
+            dither_previous = DITHER_SEED[0];
+            pdm_p           = 0;
+            pdm_n           = 0;
+        } else {
+            // rawの小数点位置を1bit増やすことで、入力精度を落とさず1/2スケールにする。
+            let x: State = $signed({audio.raw[31] repeat 6, audio.raw});
+
+            // 0/4の乱数の前後差から、帰還基準の2^-30をピークとする微小HPディザを作る。
+            // resetを挟まない区間では差分和が始点と終点の差となり、累積寄与は±4 LSB以内に収まる。
+            let current : State = if dither_prng[0] ? 38'sd4 : 38'sd0;
+            let previous: State = if dither_previous ? 38'sd4 : 38'sd0;
+            let dither  : State = current - previous;
+
+            // 前clockの差動出力を両積分器へ帰還し、第2段にはこのclockのnext_1を渡す。
+            // 帰還減算と入力・ディザ加算を並列に求め、加算器の直列段数を抑える。
+            let feedback: State = if pdm_p ? UNITY : (if pdm_n ? -UNITY : 38'sd0);
+            let next_1  : State = (integrator_1 - feedback) + (x + dither);
+            let next_2  : State = (integrator_2 - feedback) + next_1;
+
+            integrator_1 = next_1;
+            integrator_2 = next_2;
+            pdm_p        = next_2 >= 38'sd2147483648;
+            pdm_n        = next_2 <= -38'sd2147483648;
+
+            // 右シフトGalois LFSRの更新にはedge前のLSBを使い、前回bitも同じ値で更新する。
+            dither_previous = dither_prng[0];
+            dither_prng     = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8000_0057 : 32'd0);
+        }
+    }
+}
+
+#[test(test_delta_sigma_ternary)]
+module test_delta_sigma_ternary {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm_p: logic;
+    var pdm_n: logic;
+    inst dut: DeltaSigma2ndTernary ( clk, rst, audio, pdm_p, pdm_n );
+    initial {
+        var hash     : u32;
+        audio.raw = 0;
+        rst.assert();
+        $assert(!pdm_p && !pdm_n, "reset zero");
+        audio.raw = 32'h00000000;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        audio.raw = 32'h00000001;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        audio.raw = 32'hffffffff;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        audio.raw = 32'h00000020;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        audio.raw = 32'hffffffe0;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'hfc616f9e, "integer reference mismatch");
+        audio.raw = 32'h7fffffff;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h30210000, "integer reference mismatch");
+        audio.raw = 32'h80000000;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'h65dece62, "integer reference mismatch");
+        audio.raw = 32'h2aaaaaaa;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'hf8f77fdf, "integer reference mismatch");
+        audio.raw = 32'h00000000;
+        hash      = 0;
+        for _ in 0..8192 {
+            clk.next();
+            $assert(!(pdm_p && pdm_n), "illegal differential code");
+            $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
+            hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
+        }
+        $assert(hash == 32'hfa9703de, "integer reference mismatch");
+        rst.assert();
+        $assert(!pdm_p && !pdm_n, "reset after activity");
+        audio.raw = 1;
+        clk.next();
+        $assert(dut.integrator_1 == 38'sd1, "input LSB");
+        $finish();
+    }
+}
