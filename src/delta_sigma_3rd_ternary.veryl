@@ -4,7 +4,7 @@ import gndless_fixedpoint::Q1_31;
 /// 単段3次3値デルタシグマ変調器
 ///
 /// Q1.31入力を毎posedgeで取り込み、直後に2本の登録GPIOを更新する。
-/// pdm_p-pdm_nを+1/0/-1として復調したときの利得は1/2で、入力下位5bitは負無限大へ丸めて切り捨てる。
+/// pdm_p-pdm_nを+1/0/-1として復調したときの利得は1/2で、入力全32bitを保持する。
 /// DC・微小入力では周期的な成分が残る場合がある。
 /// 入力波形によっては過負荷になるため、overloadを監視する。
 /// 過負荷検出時は状態をクリアし、両GPIO=0・overload=1を1clock出力して次周期から再開する。
@@ -19,21 +19,21 @@ pub module DeltaSigma3rdTernary #(
     pdm_n   : output  logic                               , /// 登録負側GPIO
     overload: output  logic                               , /// 過負荷検出を1clock通知、この周期の差動値は0
 ) {
-    // 全状態を小数27bitとし、保存範囲を順に[-16,16)、[-64,64)、[-256,256)とする。
-    type State1 = signed logic<32>;
-    type State2 = signed logic<34>;
-    type State3 = signed logic<36>;
+    // 全状態を小数32bitとし、保存範囲を順に[-16,16)、[-64,64)、[-256,256)とする。
+    type State1 = signed logic<37>;
+    type State2 = signed logic<39>;
+    type State3 = signed logic<41>;
 
     // 更新値にはguardを1bit加え、状態を切り詰める前にoverflowを検出する。
-    type Next1 = signed logic<33>;
-    type Next2 = signed logic<35>;
-    type Next3 = signed logic<37>;
+    type Next1 = signed logic<38>;
+    type Next2 = signed logic<40>;
+    type Next3 = signed logic<42>;
 
-    // 保護範囲内では帰還・入力・ディザの合計が±32未満となるため、小数27bitの33bit幅で判定できる。
-    type Quantizer = signed logic<33>;
+    // 保護範囲内では帰還・入力・ディザの合計が±64未満となるため、小数32bitの39bit幅で判定できる。
+    type Quantizer = signed logic<39>;
 
-    // 小数27bitの状態とQ24係数の積・和を、小数51bitのまま保持する。
-    type Wide = signed logic<57>;
+    // 小数32bitの状態とQ23係数の積・和を、小数55bitのまま保持する。
+    type Wide = signed logic<62>;
 
     var integrator_1: State1;
     var integrator_2: State2;
@@ -41,7 +41,7 @@ pub module DeltaSigma3rdTernary #(
 
     var dither_prng: logic<32>;
 
-    const UNITY: Next1 = 33'sd134217728;
+    const UNITY: Next1 = 38'sd4294967296;
 
     always_ff {
         if_reset {
@@ -53,16 +53,16 @@ pub module DeltaSigma3rdTernary #(
             pdm_n        = 0;
             overload     = 0;
         } else {
-            // 下位5bitの除去はQ1.31から小数27bitへの変換と1/2スケールを兼ね、負無限大へ丸める。
-            let x    : signed logic<27> = $signed(audio.raw[31:5]);
-            let x_ext: Quantizer        = $signed({x[26] repeat 6, x});
+            // 小数32bitとして解釈し、入力全32bitを保持したまま利得1/2にする。
+            let x    : signed logic<32> = $signed(audio.raw);
+            let x_ext: Quantizer        = $signed({x[31] repeat 7, x});
 
             // シフト前に符号拡張し、元の状態幅でのシフトによる上位bitの欠落を防ぐ。
-            let s1: Wide = $signed({integrator_1[31] repeat 25, integrator_1});
-            let s2: Wide = $signed({integrator_2[33] repeat 23, integrator_2});
-            let s3: Wide = $signed({integrator_3[35] repeat 21, integrator_3});
+            let s1: Wide = $signed({integrator_1[36] repeat 25, integrator_1});
+            let s2: Wide = $signed({integrator_2[38] repeat 23, integrator_2});
+            let s3: Wide = $signed({integrator_3[40] repeat 21, integrator_3});
 
-            // Q24係数11182988、3418645、453260を係数誤差なしのCSD加算木へ展開し、DSP推論を避ける。
+            // Q23係数11182988、3418645、453260を係数誤差なしのCSD加算木へ展開し、DSP推論を避ける。
             let product_1: Wide = (((-(s1 <<< 2) + (s1 <<< 4)) + (-(s1 <<< 7) + ((s1 <<< 10) + (s1 <<< 13))))
                 + (((s1 <<< 15) + (s1 <<< 17)) + ((s1 <<< 19) + ((s1 <<< 21) + (s1 <<< 23)))));
             let product_2: Wide = ((((s2 <<< 0) + (s2 <<< 2)) + ((s2 <<< 4) + (s2 <<< 9)))
@@ -70,47 +70,47 @@ pub module DeltaSigma3rdTernary #(
             let product_3: Wide = (((-(s3 <<< 2) + (s3 <<< 4)) + ((s3 <<< 7) + (s3 <<< 9)))
                 + (((s3 <<< 11) + -(s3 <<< 13)) + (-(s3 <<< 16) + (s3 <<< 19))));
 
-            // 3積を合計してから一度だけ小数24bitを捨て、各積を個別に丸める誤差を避ける。
-            let feedback: Quantizer = ((product_1 + product_2 + product_3) >>> 24) as 33;
+            // 3積を合計してから一度だけ小数23bitを捨て、各積を個別に丸める誤差を避ける。
+            let feedback: Quantizer = ((product_1 + product_2 + product_3) >>> 23) as 39;
 
-            // 8bit区画の差を使い、閾値ディザのピークを255/2^14（約0.01556）に制限する。
+            // 8bit区画の差を使い、閾値ディザのピークを255/2^10（約0.249）に制限する。
             // ディザは判定閾値にだけ作用し、積分器入力xには直接加えない。
             let random_a         : signed logic<10> = $signed({2'b00, dither_prng[7:0]});
             let random_b         : signed logic<10> = $signed({2'b00, dither_prng[15:8]});
             let random_difference: signed logic<10> = random_a - random_b;
-            let dither           : Quantizer        = $signed({random_difference[9] repeat 23, random_difference})
-                <<< 13;
+            let dither           : Quantizer        = $signed({random_difference[9] repeat 29, random_difference})
+                <<< 22;
 
-            // 入力とディザを先に加算し、CSD加算木の後ろに置く演算を33bit減算1個にする。
+            // 入力とディザを先に加算し、CSD加算木の後ろに置く演算を39bit減算1個にする。
             let input_with_dither: Quantizer = x_ext + dither;
             let quantizer_input  : Quantizer = input_with_dither - feedback;
-            let positive         : logic     = quantizer_input >= 33'sd67108864;
-            let negative         : logic     = quantizer_input <= -33'sd67108864;
+            let positive         : logic     = quantizer_input >= 38'sd1073741824;
+            let negative         : logic     = quantizer_input <= -38'sd1073741824;
 
             // s1 += q - xの符号規約とし、量子化器で状態和を引くことで負帰還を構成する。
             // qの確定を待たず±1と0の候補を計算し、量子化器から保護判定までのcarry chainを避ける。
-            let base_1         : Next1 = $signed({integrator_1[31], integrator_1}) - x_ext;
+            let base_1         : Next1 = $signed({integrator_1[36], integrator_1}) - $signed({x[31] repeat 6, x});
             let next_1_positive: Next1 = base_1 + UNITY;
             let next_1_negative: Next1 = base_1 - UNITY;
 
             // guardと保存先の符号bitが異なると範囲外で、負端点は受理し正端点は除外する。
             // 未選択の候補だけがoverflowしても、実際の状態更新は妨げない。
-            let overflow_positive: logic = next_1_positive[32] ^ next_1_positive[31];
-            let overflow_negative: logic = next_1_negative[32] ^ next_1_negative[31];
+            let overflow_positive: logic = next_1_positive[37] ^ next_1_positive[36];
+            let overflow_negative: logic = next_1_negative[37] ^ next_1_negative[36];
             let overflow_1       : logic = if positive ?
                 overflow_positive
             :
-                (if negative ? overflow_negative : (base_1[32] ^ base_1[31]))
+                (if negative ? overflow_negative : (base_1[37] ^ base_1[36]))
             ;
             let next_1           : Next1 = if positive ? next_1_positive : (if negative ? next_1_negative : base_1);
 
             // 第2・第3段はedge前の状態を使い、next_1やnext_2を連鎖させない。
-            let next_2    : Next2 = $signed({integrator_2[33], integrator_2})
-                + $signed({integrator_1[31] repeat 3, integrator_1});
-            let next_3    : Next3 = $signed({integrator_3[35], integrator_3})
-                + $signed({integrator_2[33] repeat 3, integrator_2});
-            let overflow_2: logic = next_2[34] ^ next_2[33];
-            let overflow_3: logic = next_3[36] ^ next_3[35];
+            let next_2    : Next2 = $signed({integrator_2[38], integrator_2})
+                + $signed({integrator_1[36] repeat 3, integrator_1});
+            let next_3    : Next3 = $signed({integrator_3[40], integrator_3})
+                + $signed({integrator_2[38] repeat 3, integrator_2});
+            let overflow_2: logic = next_2[39] ^ next_2[38];
+            let overflow_3: logic = next_3[41] ^ next_3[40];
 
             // 過負荷時も乱数を進め、保護による状態クリアではディザの位相を巻き戻さない。
             dither_prng = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8020_0003 : 32'd0);
@@ -128,9 +128,9 @@ pub module DeltaSigma3rdTernary #(
                 pdm_n        = 0;
                 overload     = 1;
             } else {
-                integrator_1 = next_1 as 32;
-                integrator_2 = next_2 as 34;
-                integrator_3 = next_3 as 36;
+                integrator_1 = next_1 as 37;
+                integrator_2 = next_2 as 39;
+                integrator_3 = next_3 as 41;
             }
         }
     }
@@ -161,18 +161,22 @@ module test_delta_sigma_3rd_ternary_vectors {
         overload: overload_other,
     );
     const EXPECTED      : logic<32> [12] = '{
-        32'ha1e19dc5, 32'ha1e19dc5, 32'h41bdca82, 32'h323d1931, 32'h41bdca82, 32'he8e651d9, 32'ha9b61985, 32'hb5529a73,
-        32'hb0a705f9, 32'h59d19611, 32'h0b5517bb, 32'h58e814d9
+        32'ha1e19dc5, 32'hdfe25889, 32'hfca6ef41, 32'h5047c6e9, 32'h81631e05, 32'hea20b111, 32'he2b2690f, 32'h4f38a04d,
+        32'h6ec5e265, 32'h33e311cf, 32'h5a71433a, 32'he930f4a5
     };
     const EXPECTED_OTHER: logic<32> [12] = '{
-        32'ha1e19dc5, 32'ha1e19dc5, 32'h563ae993, 32'h35fa8b89, 32'h563ae993, 32'h36ea04d9, 32'h2c65f305, 32'h9ac8139f,
-        32'hf2e35775, 32'h901849f1, 32'ha75d5cb3, 32'hba661119
+        32'ha1e19dc5, 32'h6ad33425, 32'h55a20569, 32'h6eda560d, 32'h3d19f935, 32'hc3dcbdae, 32'h487a75ab, 32'he8267f91,
+        32'he0becf25, 32'h1f0cb43b, 32'h70fd75f9, 32'h031f04d9
     };
     initial {
         for _ in 0..2 {
             for phase in 0..12 {
                 var checksum      : logic<32>;
                 var checksum_other: logic<32>;
+                var input_sum     : i64      ;
+                var output_sum    : i64      ;
+                input_sum      = 0;
+                output_sum     = 0;
                 checksum       = 32'd2166136261;
                 checksum_other = 32'd2166136261;
                 audio.raw      = 0;
@@ -203,7 +207,10 @@ module test_delta_sigma_3rd_ternary_vectors {
                         10     : audio.raw = (i % 250) * 32'd17179869 - 32'h80000000;
                         default: audio.raw = if (i % 2) == 1 ? Q1_31::MAX : Q1_31::MIN;
                     }
+                    input_sum += $signed(audio.raw) as i64;
                     clk.next();
+                    output_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
+                    $assert((dut.integrator_1 as i64) == output_sum - input_sum, "CV conservation");
                     $assert(!overload && !overload_other, "vector overload");
                     $assert(!(pdm_p && pdm_n) && !(pdm_other_p && pdm_other_n), "illegal code");
                     checksum       = (checksum ^ (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1))) * 32'd16777619;
@@ -262,6 +269,31 @@ module test_delta_sigma_3rd_ternary_square_sweep {
                 );
             }
         }
+        $finish();
+    }
+}
+
+// 正負1LSBが切り捨てられず、resetで状態とディザ位相が戻ることを検証。
+#[test(test_delta_sigma_3rd_ternary_precision)]
+module test_delta_sigma_3rd_ternary_precision {
+    inst clk  : $tb::clock_gen;
+    inst rst  : $tb::reset_gen ( clk );
+    inst audio: FixedPointValue::<Q1_31>;
+    var pdm_p   : logic;
+    var pdm_n   : logic;
+    var overload: logic;
+    inst dut: DeltaSigma3rdTernary ( clk, rst, audio, pdm_p, pdm_n, overload );
+    initial {
+        audio.raw = 1;
+        rst.assert();
+        clk.next();
+        $assert(dut.integrator_1 == -37'sd1, "positive input LSB lost");
+        $assert(!pdm_p && !pdm_n && !overload, "positive LSB output");
+        audio.raw = 32'hffffffff;
+        rst.assert();
+        clk.next();
+        $assert(dut.integrator_1 == 37'sd1, "negative input LSB lost");
+        $assert(!pdm_p && !pdm_n && !overload, "negative LSB output");
         $finish();
     }
 }

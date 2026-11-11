@@ -6,7 +6,7 @@ import gndless_fixedpoint::Q1_31;
 /// pdm_p-pdm_nを+1/0/-1として復調した利得は1/2で、00をゼロに使う。
 /// reset中は00となり、11は通常動作でも生成しない。
 /// 入力32bitを保持し、状態は小数32bit・全幅38bit、演算範囲外はwrapする。
-/// DITHER_SEEDは非ゼロとし、微小HPディザでもDCトーンの抑制は保証しない。
+/// DITHER_SEEDは非ゼロとし、閾値ディザでもDCトーンの抑制は保証しない。
 /// clockは利用側で50MHzを供給し、入力を同じclock domainで保持または補間する。
 /// GPIOの遅延差・電圧差と復調フィルタによる誤差は利用側で評価する。
 pub module DeltaSigma2ndTernary #(
@@ -52,18 +52,23 @@ pub module DeltaSigma2ndTernary #(
 
             // 前clockの差動出力を両積分器へ帰還し、第2段にはこのclockのnext_1を渡す。
             // 帰還減算と入力・ディザ加算を並列に求め、加算器の直列段数を抑える。
-            let feedback: State = if pdm_p ? UNITY : (if pdm_n ? -UNITY : 38'sd0);
-            let next_1  : State = (integrator_1 - feedback) + (x + dither);
-            let next_2  : State = (integrator_2 - feedback) + next_1;
+            // 閾値のTPDFディザは入力平均を変えずに小振幅の周期列を崩す。
+            let random_a        : signed logic<10> = $signed({2'b00, dither_prng[7:0]});
+            let random_b        : signed logic<10> = $signed({2'b00, dither_prng[15:8]});
+            let difference      : signed logic<10> = random_a - random_b;
+            let threshold_dither: State            = $signed({difference[9] repeat 28, difference}) <<< 23;
+            let feedback        : State            = if pdm_p ? UNITY : (if pdm_n ? -UNITY : 38'sd0);
+            let next_1          : State            = (integrator_1 - feedback) + (x + dither);
+            let next_2          : State            = (integrator_2 - feedback) + next_1;
 
             integrator_1 = next_1;
             integrator_2 = next_2;
-            pdm_p        = next_2 >= 38'sd2147483648;
-            pdm_n        = next_2 <= -38'sd2147483648;
+            pdm_p        = (next_2 + threshold_dither) >= 38'sd2147483648;
+            pdm_n        = (next_2 + threshold_dither) <= -38'sd2147483648;
 
             // 右シフトGalois LFSRの更新にはedge前のLSBを使い、前回bitも同じ値で更新する。
             dither_previous = dither_prng[0];
-            dither_prng     = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8000_0057 : 32'd0);
+            dither_prng     = (dither_prng >> 1) ^ (if dither_prng[0] ? 32'h8020_0003 : 32'd0);
         }
     }
 }
@@ -77,14 +82,22 @@ module test_delta_sigma_ternary {
     var pdm_n: logic;
     inst dut: DeltaSigma2ndTernary ( clk, rst, audio, pdm_p, pdm_n );
     initial {
-        var hash     : u32;
-        audio.raw = 0;
+        var hash        : u32;
+        var input_sum   : i64;
+        var feedback_sum: i64;
+        input_sum    = 0;
+        feedback_sum = 0;
+        audio.raw    = 0;
         rst.assert();
         $assert(!pdm_p && !pdm_n, "reset zero");
         audio.raw = 32'h00000000;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
@@ -93,7 +106,11 @@ module test_delta_sigma_ternary {
         audio.raw = 32'h00000001;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
@@ -102,66 +119,94 @@ module test_delta_sigma_ternary {
         audio.raw = 32'hffffffff;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        $assert(hash == 32'he3f19080, "integer reference mismatch");
         audio.raw = 32'h00000020;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'h5c420000, "integer reference mismatch");
+        $assert(hash == 32'h2d3c538c, "integer reference mismatch");
         audio.raw = 32'hffffffe0;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'hfc616f9e, "integer reference mismatch");
+        $assert(hash == 32'hb04dac88, "integer reference mismatch");
         audio.raw = 32'h7fffffff;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'h30210000, "integer reference mismatch");
+        $assert(hash == 32'hb2ad0c3a, "integer reference mismatch");
         audio.raw = 32'h80000000;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'h65dece62, "integer reference mismatch");
+        $assert(hash == 32'h9c5d39d6, "integer reference mismatch");
         audio.raw = 32'h2aaaaaaa;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'hf8f77fdf, "integer reference mismatch");
+        $assert(hash == 32'ha966dd5c, "integer reference mismatch");
         audio.raw = 32'h00000000;
         hash      = 0;
         for _ in 0..8192 {
+            input_sum    += $signed(audio.raw) as i64;
+            feedback_sum += if pdm_p ? 64'sd4294967296 : (if pdm_n ? -64'sd4294967296 : 64'sd0);
             clk.next();
+            let residual: i64 = (dut.integrator_1 as i64) - input_sum + feedback_sum;
+            $assert(residual >= -64'sd4 && residual <= 64'sd4, "CV conservation");
             $assert(!(pdm_p && pdm_n), "illegal differential code");
             $assert(dut.integrator_1 >: -38'sd34359738368 && dut.integrator_1 <: 38'sd34359738368, "state bound");
             hash = hash * 31 + (if pdm_p ? 32'd2 : (if pdm_n ? 32'd0 : 32'd1));
         }
-        $assert(hash == 32'hfa9703de, "integer reference mismatch");
+        $assert(hash == 32'h92e5bba9, "integer reference mismatch");
         rst.assert();
         $assert(!pdm_p && !pdm_n, "reset after activity");
         audio.raw = 1;
