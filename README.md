@@ -1,6 +1,6 @@
 # gndless_delta_sigma
 
-Q1.31波形を毎clock 1bit PDMへ変換するVeryl packageです。
+Q1.31波形を毎clockの2値または3値PDMへ変換するVeryl packageです。
 
 | module | 復調利得 | 特徴 |
 | --- | --- | --- |
@@ -22,9 +22,9 @@ inst modulator: gndless_delta_sigma::DeltaSigma3rd (
 );
 ```
 
-2次・3次の`DITHER_SEED`は非ゼロとし、並列チャンネルには異なる値を指定します。3次の`overload=1`では状態とPDMを0にして、次周期から通常処理へ戻ります。出力異常の診断信号として使ってください。
+2次・3次の`DITHER_SEED`は非ゼロとし、並列チャンネルには異なる値を指定します。3次の`overload=1`では状態を0、出力をreset時と同じ値にして、次周期から通常処理へ戻ります。出力異常の診断信号として使ってください。
 
-resetの極性・同期性はVerylのbuild設定に従います。reset中のPDM=0固定は復調上の負フルスケールなので、必要な起動時ミュートは利用側で扱います。PDMの復調精度と応答は復調フィルタにも依存し、入力32bitがそのままアナログ32bit精度になるわけではありません。
+resetの極性・同期性はVerylのbuild設定に従います。2値版のreset中のPDM=0固定は復調上の負フルスケールなので、必要な起動時ミュートは利用側で扱います。3値版のreset出力は両GPIO=0で、差動値も0です。PDMの復調精度と応答は復調フィルタにも依存し、入力32bitがそのままアナログ32bit精度になるわけではありません。
 
 3次2値の数値形式・係数・過負荷条件は[設計仕様](THIRD_ORDER.md)を参照してください。
 
@@ -36,9 +36,9 @@ veryl build
 veryl test --ignored  # 長時間のゼロ入力検査
 ```
 
-ゼロ入力検査はnative testとRust verification componentを使い、1次・2次は各44秒、3次は4秒のPDMをCIC・FFTで評価します。通常testからは除外しています。
+2値版のゼロ入力検査はnative testとRust verification componentを使い、1次・2次は各44秒、3次は4秒のPDMをCIC・FFTで評価します。通常testからは除外しています。
 
-3次のnative testで使うbit列期待値とLFSR周期は、標準ライブラリだけで動く整数モデルで確認できます。
+3次2値のnative testで使うbit列期待値とLFSR周期は、標準ライブラリだけで動く整数モデルで確認できます。
 
 ```sh
 python3 tools/dsm_reference.py
