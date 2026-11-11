@@ -1,15 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - 2026-11-11
 
 ### Added
 
 - 単段1bit CIFF `DeltaSigma3rd`を追加した（H_inf約1.4、閾値ディザ、状態保護、CSD定数乗算）
+- 2次3値差動出力の`DeltaSigma2ndTernary`を追加した（Q1.31全32bit保持、閾値ディザ、復調利得1/2）
+- 3次3値差動出力の`DeltaSigma3rdTernary`を追加した（Q1.31全32bit保持、Q23係数、状態保護、復調利得1/2）
+- 3値版の整数参照モデル、CV累積誤差・入力LSB・参照列・矩形波sweepの検証と、閾値・ディザ・帰還係数の比較資料を追加した
+- 2次2値・3値のVeryl synthとGowin合成・配置配線比較を追加した（GW5A-25、両方DSP=0、50MHz制約通過）
 
 ### Changed
 
 - `DeltaSigma1st`は入力32bit精度を維持し、出力をキャリーFFへ直結して1 FFと1clockの遅延を削減した
 - `DeltaSigma2nd`は入力rawを切り捨てず小数32bitで処理し、DC周期性対策の微小HPディザを維持し、LFSRをresetで直接初期化する構成へ変更した
+
+### Compatibility / Known limitations
+
+- 既存moduleのportと公開parameterは維持するが、1次の出力latency短縮と1次・2次の入力精度変更により、以前のbit列やcycle単位の出力時刻には依存しないこと
+- 3値出力は`10=+1、00=0、01=-1`で、独立した2本のGPIOと差動復調段が必要。相補固定のLVDS出力には接続しないこと
+- 3次2値版は入力下位5bitを切り捨てるが、3次3値版は全32bitを保持する
+- 3値版でも全DC値・全seedのトーン不在や任意入力列の安定性は保証しない。2次の閾値ディザは一部DC値の雑音と大振幅SNDRにトレードオフがある
+- 単体のGowin配置配線結果は実機全体の出力スキュー・アナログ精度・タイミングを保証しない。実機測定と既存の長時間idle testは未実施
 
 ## [0.2.2] - 2026-10-27
 
