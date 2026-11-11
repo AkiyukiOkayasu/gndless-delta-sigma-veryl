@@ -1,0 +1,154 @@
+{
+  "source_revision": "b2fa1c926f7ed9e522ad72fe09ca9ca267061f52",
+  "veryl_version": "0.22.1 (8521c8c 2026-11-04)",
+  "veryl": {
+    "binary": {
+      "format_version": 1,
+      "top": "DeltaSigma2nd",
+      "library": "sky130",
+      "status": "ok",
+      "cells": 1908,
+      "ffs": 376,
+      "area": {
+        "total": 20922.5,
+        "combinational": 12462.5,
+        "sequential": 8460.0,
+        "memory": 0.0
+      },
+      "timing": {
+        "delay_ns": 2.4200000000000013,
+        "depth": 27,
+        "from": "previous[2]",
+        "to": "next_2[37]"
+      },
+      "power": {
+        "total_mw": 1.1947045200000002,
+        "leakage_mw": 0.001444519999999993,
+        "dynamic_mw": 1.1932600000000002,
+        "clock_freq_mhz": 100.0,
+        "activity": 0.1
+      }
+    },
+    "ternary": {
+      "format_version": 1,
+      "top": "DeltaSigma2ndTernary",
+      "library": "sky130",
+      "status": "ok",
+      "cells": 2206,
+      "ffs": 445,
+      "area": {
+        "total": 24272.5,
+        "combinational": 14260.0,
+        "sequential": 10012.5,
+        "memory": 0.0
+      },
+      "timing": {
+        "delay_ns": 3.8000000000000025,
+        "depth": 43,
+        "from": "pdm_p[0]",
+        "to": "pdm_p[0]"
+      },
+      "power": {
+        "total_mw": 1.4082583700000013,
+        "leakage_mw": 0.0016943699999999924,
+        "dynamic_mw": 1.4065640000000013,
+        "clock_freq_mhz": 100.0,
+        "activity": 0.1
+      }
+    }
+  },
+  "gowin": {
+    "tool": "V1.9.12",
+    "device": "GW5A-LV25MG121NC1/I0",
+    "device_version": "A",
+    "clock_period_ns": 20,
+    "input_wrapper_ffs": 32,
+    "iob_register_packing": false,
+    "place_option": 1,
+    "route_option": 2,
+    "rows": [
+      {
+        "variant": "binary",
+        "synthesis": {
+          "ff": 142,
+          "lut": 10,
+          "alu": 117,
+          "logic": 127,
+          "dsp": 0,
+          "bsram": 0
+        },
+        "pnr": {
+          "logic": 127,
+          "lut": 8,
+          "alu": 119,
+          "ff": 142,
+          "fmax_mhz": 119.083,
+          "setup_violated_endpoints": 0,
+          "hold_violated_endpoints": 0
+        },
+        "netlist_primitives": {
+          "LUT2": 7,
+          "DFFCE": 126,
+          "DFFPE": 16,
+          "ALU": 117,
+          "INV": 3,
+          "VCC": 2,
+          "GND": 2,
+          "IBUF": 34,
+          "OBUF": 1,
+          "GSR": 1
+        },
+        "source_sha256": {
+          "delta_sigma_3rd.sv": "6f1cf5d87f28db03e11909d1ef07048d684067df3d7620fef974a5762d93f9fe",
+          "top.sv": "9e12f61680ebfbe55d66423d92ede7fa8595fba0cc9657a9a8e00d104605eeee",
+          "delta_sigma_ternary.sv": "20952ed64683d217a1cfea9fec9f55f20db67fa26bcd06cf875abb194dd8e720",
+          "delta_sigma.sv": "1c7f74cfa1cc9072d36769e811248bfc32412fd5b6d18ed5bab52a464d8a049b",
+          "delta_sigma_3rd_ternary.sv": "9a4a3baaa5ce43dc6b3bc6988667a049da28ca894d49c724b5d925939b69fe8b",
+          "fixed_point.sv": "1ecbd87fbf23baa4230cb95ec02e7be8a3645faab276acae11dd2f57718b4a5f"
+        }
+      },
+      {
+        "variant": "ternary",
+        "synthesis": {
+          "ff": 143,
+          "lut": 23,
+          "alu": 149,
+          "logic": 172,
+          "dsp": 0,
+          "bsram": 0
+        },
+        "pnr": {
+          "logic": 173,
+          "lut": 22,
+          "alu": 151,
+          "ff": 143,
+          "fmax_mhz": 91.843,
+          "setup_violated_endpoints": 0,
+          "hold_violated_endpoints": 0
+        },
+        "netlist_primitives": {
+          "LUT2": 7,
+          "LUT4": 13,
+          "LUT3": 2,
+          "DFFCE": 127,
+          "DFFPE": 16,
+          "ALU": 149,
+          "VCC": 2,
+          "GND": 2,
+          "IBUF": 34,
+          "OBUF": 2,
+          "INV": 1,
+          "GSR": 1
+        },
+        "source_sha256": {
+          "delta_sigma_3rd.sv": "6f1cf5d87f28db03e11909d1ef07048d684067df3d7620fef974a5762d93f9fe",
+          "top.sv": "9e12f61680ebfbe55d66423d92ede7fa8595fba0cc9657a9a8e00d104605eeee",
+          "delta_sigma_ternary.sv": "20952ed64683d217a1cfea9fec9f55f20db67fa26bcd06cf875abb194dd8e720",
+          "delta_sigma.sv": "1c7f74cfa1cc9072d36769e811248bfc32412fd5b6d18ed5bab52a464d8a049b",
+          "delta_sigma_3rd_ternary.sv": "9a4a3baaa5ce43dc6b3bc6988667a049da28ca894d49c724b5d925939b69fe8b",
+          "fixed_point.sv": "1ecbd87fbf23baa4230cb95ec02e7be8a3645faab276acae11dd2f57718b4a5f"
+        }
+      }
+    ]
+  }
+}
