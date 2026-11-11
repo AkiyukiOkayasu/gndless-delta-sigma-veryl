@@ -1,7 +1,8 @@
 import gndless_fixedpoint::FixedPointValue;
 import gndless_fixedpoint::Q1_31;
 
-/// 2次3値デルタシグマ変調器。
+/// 2次3値デルタシグマ変調器
+///
 /// Q1.31入力を毎posedgeで受理し、直後に2本の登録GPIOを更新する。
 /// pdm_p-pdm_nを+1/0/-1として復調した利得は1/2で、00をゼロに使う。
 /// reset中は00となり、11は通常動作でも生成しない。
