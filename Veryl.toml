@@ -1,6 +1,6 @@
 [project]
 name = "gndless_delta_sigma"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Akiyuki Okayasu"]
 description = "First-, second- and third-order Q1.31 delta-sigma modulators for Veryl."
 license = "MIT OR Apache-2.0"
